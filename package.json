@@ -1,0 +1,14 @@
+{
+  "name": "workout-backend",
+  "version": "1.0.0",
+  "private": true,
+  "author": "Rafael Cabanillas",
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "nodemon",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  }
+}
