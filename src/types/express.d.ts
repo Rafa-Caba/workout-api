@@ -1,12 +1,20 @@
-import "express-serve-static-core";
+import "express";
 
-declare module "express-serve-static-core" {
-  interface Request {
-    user?: {
+declare global {
+  namespace Express {
+    interface User {
       id: string;
-      role: "admin" | "user";
-    };
+      role?: "admin" | "user";
+    }
+
+    interface Request {
+      user?: User;
+
+      validatedParams?: unknown;
+      validatedQuery?: unknown;
+      validatedBody?: unknown;
+    }
   }
 }
 
-export {};
+export { };
