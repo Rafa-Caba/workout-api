@@ -6,7 +6,7 @@ import type {
     CalendarTotals,
     TrainingTypeTotals,
     WeekRange,
-} from "../types/workout.types";
+} from "../types/workoutDay.types";
 
 /**
  * =========================================================

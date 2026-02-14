@@ -13,6 +13,7 @@ import workoutSummaryRoutes from "./routes/workoutSummary.routes";
 import workoutInsightsRoutes from "./routes/workoutInsights.routes";
 import workoutExportRoutes from "./routes/workoutExport.routes";
 import movementRoutes from "./routes/movement.routes";
+import settingsRoutes from "./routes/settings.routes";
 
 import { errorHandler } from "./middlewares/errorHandler";
 
@@ -26,6 +27,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/settings", settingsRoutes);
 app.use("/api/workout", workoutDayRoutes);
 app.use("/api/workout", workoutSessionRoutes);
 app.use("/api/workout", workoutMediaRoutes);

@@ -42,13 +42,15 @@ const safeNum = (v: any): number | null => {
     return Number.isFinite(n) ? n : null;
 };
 
-const diffDays = (aIso: string, bIso: string): number => {
-    // Both are YYYY-MM-DD
-    const a = new Date(`${aIso}T00:00:00.000Z`).getTime();
-    const b = new Date(`${bIso}T00:00:00.000Z`).getTime();
-    return Math.round((a - b) / 86400000);
+const daysDiff = (a: string, b: string): number => {
+    const da = new Date(`${a}T00:00:00.000Z`).getTime();
+    const db = new Date(`${b}T00:00:00.000Z`).getTime();
+    return Math.round((db - da) / 86400000);
 };
 
+/** =========================
+ * PRs
+ * ========================= */
 export const getSessionPrs = async (
     userId: string,
     from: string,
@@ -58,7 +60,6 @@ export const getSessionPrs = async (
     const userObjectId = toObjectId(userId);
     const metrics = parseMetrics(metricsRaw);
 
-    // Flatten sessions in range
     const rows = await WorkoutDayModel.aggregate([
         { $match: { userId: userObjectId, date: { $gte: from, $lte: to } } },
         { $unwind: { path: "$training.sessions", preserveNullAndEmptyArrays: false } },
@@ -85,7 +86,7 @@ export const getSessionPrs = async (
     const pickMax = (metric: InsightMetric) => {
         let best: any = null;
         for (const r of rows) {
-            const v = safeNum(r[metric]);
+            const v = safeNum((r as any)[metric]);
             if (v === null) continue;
             if (!best || v > best.value) best = { value: v, row: r };
         }
@@ -105,7 +106,7 @@ export const getSessionPrs = async (
     const pickMin = (metric: InsightMetric) => {
         let best: any = null;
         for (const r of rows) {
-            const v = safeNum(r[metric]);
+            const v = safeNum((r as any)[metric]);
             if (v === null) continue;
             if (!best || v < best.value) best = { value: v, row: r };
         }
@@ -123,7 +124,6 @@ export const getSessionPrs = async (
     };
 
     for (const m of metrics) {
-        // pace is “better when lower”
         if (m === "paceSecPerKm") pickMin(m);
         else pickMax(m);
     }
@@ -131,6 +131,9 @@ export const getSessionPrs = async (
     return { range: { from, to }, prs };
 };
 
+/** =========================
+ * Streaks
+ * ========================= */
 export const getStreaks = async (
     userId: string,
     asOf: string,
@@ -146,7 +149,8 @@ export const getStreaks = async (
 
     const qualifies = (d: any) => {
         const hasTraining = Array.isArray(d?.training?.sessions) && d.training.sessions.length > 0;
-        const hasSleep = d?.sleep && (d.sleep.totalMinutes ?? null) !== null;
+
+        const hasSleep = d?.sleep && (d.sleep.timeAsleepMinutes ?? null) !== null;
 
         if (mode === "training") return hasTraining;
         if (mode === "sleep") return hasSleep;
@@ -154,13 +158,6 @@ export const getStreaks = async (
     };
 
     const gap = clamp(Number(gapDays ?? 0), 0, 365);
-
-    const daysDiff = (a: string, b: string): number => {
-        const da = new Date(`${a}T00:00:00.000Z`).getTime();
-        const db = new Date(`${b}T00:00:00.000Z`).getTime();
-        return Math.round((db - da) / 86400000);
-    };
-
 
     let lastQualifiedDate: string | null = null;
     for (let i = days.length - 1; i >= 0; i--) {
@@ -188,7 +185,6 @@ export const getStreaks = async (
             const diff = daysDiff(date, anchor);
             if (diff <= 0) continue;
 
-            // break if too far apart
             if (diff > gap + 1) break;
 
             currentStreakDays += 1;
@@ -214,11 +210,8 @@ export const getStreaks = async (
 
         const diff = daysDiff(prevQual, date);
 
-        if (diff <= gap + 1) {
-            run += 1;
-        } else {
-            run = 1;
-        }
+        if (diff <= gap + 1) run += 1;
+        else run = 1;
 
         prevQual = date;
         if (run > longestStreakDays) longestStreakDays = run;
@@ -234,6 +227,9 @@ export const getStreaks = async (
     };
 };
 
+/** =========================
+ * Recovery
+ * ========================= */
 export const getRecovery = async (userId: string, from: string, to: string): Promise<RecoveryResponse> => {
     const userObjectId = toObjectId(userId);
 
@@ -245,20 +241,18 @@ export const getRecovery = async (userId: string, from: string, to: string): Pro
     const points: RecoveryPoint[] = days.map((d: any) => {
         const sleepScore = safeNum(d?.sleep?.score);
         const deepMinutes = safeNum(d?.sleep?.deepMinutes);
-        const totalSleepMinutes = safeNum(d?.sleep?.totalMinutes);
+
+        const totalSleepMinutes = safeNum(d?.sleep?.timeAsleepMinutes);
 
         const hasAnySleepSignal = sleepScore !== null || deepMinutes !== null || totalSleepMinutes !== null;
 
-        // trainingLoad proxy (0..)
         const sessions: any[] = Array.isArray(d?.training?.sessions) ? d.training.sessions : [];
         const load = sessions.reduce((acc, s) => {
             const kcal = safeNum(s?.activeKcal) ?? 0;
             const dur = safeNum(s?.durationSeconds) ?? 0;
-            // kcal dominates, duration adds small weight
             return acc + kcal + dur * 0.05;
         }, 0);
 
-        // If no sleep data at all, mark as unknown instead of "red 50"
         if (!hasAnySleepSignal) {
             return {
                 date: d.date,

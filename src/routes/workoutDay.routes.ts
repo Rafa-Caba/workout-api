@@ -15,6 +15,8 @@ import {
     mediaUploadQuerySchema,
     mediaDeleteQuerySchema,
     upsertDayBodySchema,
+    attachSessionMediaQuerySchema,
+    attachSessionMediaBodySchema,
 } from "../validations/workoutDay.schemas";
 
 const router = Router();
@@ -25,12 +27,7 @@ const router = Router();
  * =========================================================
  */
 
-router.get(
-    "/days/:date",
-    requireAuth,
-    validate("params", dayParamsSchema),
-    workoutDayController.getDay
-);
+router.get("/days/:date", requireAuth, validate("params", dayParamsSchema), workoutDayController.getDay);
 
 router.put(
     "/days/:date",
@@ -47,19 +44,9 @@ router.put(
  * =========================================================
  */
 
-router.get(
-    "/days",
-    requireAuth,
-    validate("query", rangeQuerySchema),
-    workoutDayController.getDaysRange
-);
+router.get("/days", requireAuth, validate("query", rangeQuerySchema), workoutDayController.getDaysRange);
 
-router.get(
-    "/calendar",
-    requireAuth,
-    validate("query", calendarQuerySchema),
-    workoutDayController.getCalendar
-);
+router.get("/calendar", requireAuth, validate("query", calendarQuerySchema), workoutDayController.getCalendar);
 
 router.get(
     "/week/:weekKey",
@@ -103,6 +90,23 @@ router.delete(
     validate("params", sessionParamsSchema),
     validate("query", mediaDeleteQuerySchema),
     workoutDayController.deleteSessionMedia
+);
+
+/**
+ * =========================================================
+ * NEW: Attach existing media items to a session (no upload)
+ * POST /days/:date/sessions/:sessionId/media/attach?returnMode=day|session
+ * body: { items: WorkoutMediaItem[] }
+ * =========================================================
+ */
+
+router.post(
+    "/days/:date/sessions/:sessionId/media/attach",
+    requireAuth,
+    validate("params", sessionParamsSchema),
+    validate("query", attachSessionMediaQuerySchema),
+    validate("body", attachSessionMediaBodySchema),
+    workoutDayController.attachSessionMedia
 );
 
 export default router;

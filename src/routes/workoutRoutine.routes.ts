@@ -9,6 +9,8 @@ import {
     routineWeekParamsSchema,
     routineAttachmentDeleteQuerySchema,
     routineAttachmentUploadQuerySchema,
+    routineGymCheckParamsSchema,
+    routineGymCheckPatchBodySchema,
 } from "../validations/workoutRoutine.schemas";
 import { uploadTrainingMedia } from "../middlewares/cloudinary";
 
@@ -49,6 +51,20 @@ router.patch(
     validate("params", routineWeekParamsSchema),
     validate("query", routineArchiveQuerySchema),
     routineController.archiveWeekRoutine
+);
+
+/**
+ * =========================================================
+ * Gym Check (sync routine checklist + notes + duration)
+ * PATCH /api/workout/routines/weeks/:weekKey/gym-check/:dayKey
+ * =========================================================
+ */
+router.patch(
+    "/routines/weeks/:weekKey/gym-check/:dayKey",
+    requireAuth,
+    validate("params", routineGymCheckParamsSchema),
+    validate("body", routineGymCheckPatchBodySchema),
+    routineController.patchGymCheckForDay
 );
 
 /**

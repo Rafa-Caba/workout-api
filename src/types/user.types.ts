@@ -1,5 +1,5 @@
 import type { Sex, Units, UserRole } from "./auth.types";
-import type { ISODate } from "./workout.types";
+import type { ISODate } from "./workoutDay.types";
 
 export type ActivityGoal =
     | "fat_loss"

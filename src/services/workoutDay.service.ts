@@ -11,7 +11,7 @@ import {
     rollupFromDays,
     getWeekRangeFromKey,
 } from "../utils/workoutDayBuilders";
-import type { BuildOpts, StatsRangeArgs, UpsertArgs, WeekViewResponse } from "../types/workout.types";
+import type { BuildOpts, StatsRangeArgs, UpsertArgs, WeekViewResponse } from "../types/workoutDay.types";
 import { assertMovementsExist } from "./movement.service";
 
 /**

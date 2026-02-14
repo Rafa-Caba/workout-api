@@ -155,7 +155,7 @@ export const getStats = async (req: Request, res: Response) => {
 
 /**
  * =========================================================
- * Media endpoints
+ * Media endpoints (UPLOAD)
  * =========================================================
  */
 
@@ -165,8 +165,7 @@ export const addSessionMedia = async (req: Request, res: Response) => {
     const sessionId = String(req.params.sessionId);
 
     const q: any = (req as any).validatedQuery ?? req.query;
-    const returnMode: "day" | "session" =
-        q?.returnMode === "session" ? "session" : "day";
+    const returnMode: "day" | "session" = q?.returnMode === "session" ? "session" : "day";
 
     const files = normalizeMulterFiles(req);
 
@@ -201,7 +200,6 @@ export const addSessionMedia = async (req: Request, res: Response) => {
         };
     });
 
-    // sanity check upload metadata
     const missing = mediaItems.find((m) => !m.publicId || !m.url);
     if (missing) {
         return res.status(500).json({
@@ -242,8 +240,7 @@ export const addSessionMedia = async (req: Request, res: Response) => {
     const outDay = saved.toJSON();
 
     if (returnMode === "session") {
-        const outSession =
-            outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
+        const outSession = outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
 
         return res.status(200).json({
             session: outSession,
@@ -262,8 +259,7 @@ export const deleteSessionMedia = async (req: Request, res: Response) => {
     const q: any = (req as any).validatedQuery ?? req.query;
     const publicId = typeof q.publicId === "string" ? q.publicId : null;
 
-    const returnMode: "day" | "session" =
-        q?.returnMode === "session" ? "session" : "day";
+    const returnMode: "day" | "session" = q?.returnMode === "session" ? "session" : "day";
 
     if (!publicId) {
         return res.status(400).json({
@@ -307,19 +303,16 @@ export const deleteSessionMedia = async (req: Request, res: Response) => {
         });
     }
 
-    // DB consistency first
     session.media = mediaArr.filter((m: any) => m?.publicId !== publicId);
 
     const saved = await dayDoc.save();
     const outDay = saved.toJSON();
 
-    // Attempt Cloudinary delete (non-fatal)
     const rt: "image" | "video" = found?.resourceType === "video" ? "video" : "image";
     await deleteFromCloudinary(publicId, { resourceType: rt });
 
     if (returnMode === "session") {
-        const outSession =
-            outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
+        const outSession = outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
 
         return res.status(200).json({
             session: outSession,
@@ -328,4 +321,98 @@ export const deleteSessionMedia = async (req: Request, res: Response) => {
     }
 
     return res.status(200).json(outDay);
+};
+
+/**
+ * =========================================================
+ * Media endpoints (ATTACH existing Cloudinary assets)
+ * - No upload, no Cloudinary mutation
+ * =========================================================
+ */
+
+export const attachSessionMedia = async (req: Request, res: Response) => {
+    const userId = getUserIdFromReq(req);
+    const date = String(req.params.date);
+    const sessionId = String(req.params.sessionId);
+
+    const q: any = (req as any).validatedQuery ?? req.query;
+    const returnMode: "day" | "session" = q?.returnMode === "session" ? "session" : "day";
+
+    // validate() middleware already parsed this
+    const payload: any = (req as any).validatedBody ?? req.body;
+    const items: any[] = Array.isArray(payload?.items) ? payload.items : [];
+
+    if (!items.length) {
+        return res.status(400).json({
+            error: { code: "VALIDATION_ERROR", message: "Expected non-empty body.items array.", details: null },
+        });
+    }
+
+    const dayDoc = await WorkoutDayModel.findOne({
+        userId: toObjectId(userId),
+        date,
+    });
+
+    if (!dayDoc) {
+        return res.status(404).json({
+            error: { code: "NOT_FOUND", message: "Workout day not found", details: { date } },
+        });
+    }
+
+    const session = findSession(dayDoc as any, sessionId);
+    if (!session) {
+        return res.status(404).json({
+            error: { code: "NOT_FOUND", message: "Training session not found", details: { sessionId } },
+        });
+    }
+
+    if (!Array.isArray(session.media)) session.media = [];
+
+    const existingIds = new Set<string>((session.media ?? []).map((m: any) => String(m?.publicId ?? "").trim()).filter(Boolean));
+
+    let attachedCount = 0;
+    for (const raw of items) {
+        const publicId = String(raw?.publicId ?? "").trim();
+        const url = String(raw?.url ?? "").trim();
+
+        if (!publicId || !url) continue;
+        if (existingIds.has(publicId)) continue;
+
+        const resourceType: "image" | "video" = raw?.resourceType === "video" ? "video" : "image";
+        const format = raw?.format === null || typeof raw?.format === "string" ? (raw.format ?? null) : null;
+
+        const createdAt =
+            raw?.createdAt === null || typeof raw?.createdAt === "string"
+                ? (raw.createdAt ?? null)
+                : null;
+
+        session.media.push({
+            publicId,
+            url,
+            resourceType,
+            format,
+            createdAt: createdAt && createdAt.trim() ? createdAt : new Date().toISOString(),
+            meta: raw?.meta ?? null,
+        });
+
+        existingIds.add(publicId);
+        attachedCount++;
+    }
+
+    const saved = await dayDoc.save();
+    const outDay = saved.toJSON();
+
+    if (returnMode === "session") {
+        const outSession = outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
+
+        return res.status(200).json({
+            session: outSession,
+            attachedCount,
+        });
+    }
+
+    return res.status(200).json({
+        ...outDay,
+        _attach: { attachedCount },
+    });
 };

@@ -48,11 +48,6 @@ export const uploadTrainingMedia = multer({
             public_id: (req: Request, file: Express.Multer.File) => {
                 const userId = (req as any).user?.id ?? "unknown";
                 const baseName = safeSlug(file.originalname);
-
-                console.log({ userId });
-                console.log({ baseName });
-                console.log(`training_${userId}_${baseName}_${Date.now()}`);
-
                 return `training_${userId}_${baseName}_${Date.now()}`;
             },
         } as any,

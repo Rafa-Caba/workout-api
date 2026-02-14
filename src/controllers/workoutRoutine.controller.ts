@@ -6,6 +6,8 @@ import {
     initRoutineWeek,
     setRoutineArchived,
     upsertRoutineWeek,
+    patchRoutineGymCheckDay,
+    patchGymCheckDay
 } from "../services/workoutRoutine.service";
 
 const getUserIdFromReq = (req: Request): string => String((req as any).user?.id ?? "");
@@ -70,6 +72,30 @@ export const archiveWeekRoutine = async (req: Request, res: Response) => {
     return res.status(200).json(out);
 };
 
+/**
+ * =========================================================
+ * Gym Check (sync checklist)
+ * =========================================================
+ */
+export const patchGymCheckForDay = async (req: Request, res: Response) => {
+    const userId = getUserIdFromReq(req);
+    const weekKey = String(req.params.weekKey);
+    const dayKey = String(req.params.dayKey);
+
+    // validate() middleware already parsed this
+    const payload = (req as any).validatedBody ?? req.body;
+
+    const out = await patchRoutineGymCheckDay(userId, weekKey, dayKey as any, payload);
+
+    if (!out) {
+        return res.status(404).json({
+            error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } },
+        });
+    }
+
+    return res.status(200).json(out);
+};
+
 // =========================================================
 // Attachments
 // =========================================================
@@ -82,7 +108,9 @@ export const addWeekRoutineAttachments = async (req: Request, res: Response) => 
     const out = await addRoutineAttachments(userId, weekKey, files);
 
     if (!out) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });
+        return res
+            .status(404)
+            .json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });
     }
 
     if ((out as any).error) {
@@ -101,6 +129,24 @@ export const deleteWeekRoutineAttachment = async (req: Request, res: Response) =
     const deleteCloudinary = q.deleteCloudinary !== undefined ? Boolean(q.deleteCloudinary) : true;
 
     const out = await deleteRoutineAttachment(userId, weekKey, publicId, deleteCloudinary);
+
+    if (!out) {
+        return res
+            .status(404)
+            .json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });
+    }
+
+    return res.status(200).json(out);
+};
+
+export const patchWeekRoutineGymCheckDay = async (req: Request, res: Response) => {
+    const userId = getUserIdFromReq(req);
+    const weekKey = String(req.params.weekKey);
+    const dayKey = String(req.params.dayKey) as any;
+
+    const payload = req.body as any;
+
+    const out = await patchGymCheckDay(userId, weekKey, dayKey, payload);
 
     if (!out) {
         return res.status(404).json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });

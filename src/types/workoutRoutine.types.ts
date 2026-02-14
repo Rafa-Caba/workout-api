@@ -10,6 +10,7 @@ export type RoutineDayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun
  * - attachmentPublicIds links to routine.attachments[].publicId
  */
 export type RoutineExercise = {
+    id: string;
     name: string;
 
     sets: number | null;

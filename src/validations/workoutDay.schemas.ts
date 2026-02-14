@@ -114,6 +114,31 @@ export const mediaDeleteQuerySchema = z.object({
     returnMode: z.enum(["day", "session"]).optional(),
 });
 
+/**
+ * NEW: Attach existing media items (no upload)
+ * - Mirrors WorkoutMediaItemSchema in WorkoutDay.model
+ */
+export const attachSessionMediaQuerySchema = z.object({
+    returnMode: z.enum(["day", "session"]).optional(),
+});
+
+const attachMediaItemSchema = z
+    .object({
+        publicId: z.string().min(1).max(300),
+        url: z.string().url().max(2000),
+        resourceType: z.enum(["image", "video"]),
+        format: z.string().max(30).nullable().optional(),
+        createdAt: z.string().min(10).nullable().optional(), // ISO string-ish (we'll normalize in controller if null)
+        meta: recordUnknownNullable.optional(),
+    })
+    .strict();
+
+export const attachSessionMediaBodySchema = z
+    .object({
+        items: z.array(attachMediaItemSchema).min(1, "Expected at least 1 media item"),
+    })
+    .strict();
+
 const sleepSchema = z
     .object({
         timeAsleepMinutes: nonNegIntFromQuery.nullable().optional(),
