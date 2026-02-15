@@ -190,19 +190,73 @@ export async function getRoutineWeek(userId: string, weekKey: string) {
     return doc ? doc.toJSON() : null;
 }
 
+// export async function initRoutineWeek(
+//     userId: string,
+//     weekKey: string,
+//     opts?: { title?: string; split?: string; unarchive?: boolean }
+// ) {
+//     const existing = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+//     if (existing) {
+//         if (existing.status === "archived" && opts?.unarchive) {
+//             existing.status = "active";
+//             if (typeof opts.title === "string") existing.title = opts.title;
+//             if (typeof opts.split === "string") existing.split = opts.split;
+//             await existing.save();
+//         }
+//         return existing.toJSON();
+//     }
+
+//     const range = weekKeyToRange(weekKey);
+//     const days = ensure7Days(weekKey, null);
+
+//     const created = await WorkoutRoutineWeekModel.create({
+//         userId,
+//         weekKey,
+//         range,
+//         status: "active",
+//         title: typeof opts?.title === "string" ? opts.title : null,
+//         split: typeof opts?.split === "string" ? opts.split : null,
+//         plannedDays: null,
+//         attachments: [],
+//         days,
+//         meta: null,
+//     });
+
+//     return created.toJSON();
+// }
 export async function initRoutineWeek(
     userId: string,
     weekKey: string,
     opts?: { title?: string; split?: string; unarchive?: boolean }
 ) {
     const existing = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+
     if (existing) {
+        let changed = false;
+
         if (existing.status === "archived" && opts?.unarchive) {
             existing.status = "active";
-            if (typeof opts.title === "string") existing.title = opts.title;
-            if (typeof opts.split === "string") existing.split = opts.split;
-            await existing.save();
+            changed = true;
         }
+        if (typeof opts?.title === "string" && opts.title !== existing.title) {
+            existing.title = opts.title;
+            changed = true;
+        }
+        if (typeof opts?.split === "string" && opts.split !== existing.split) {
+            existing.split = opts.split;
+            changed = true;
+        }
+
+        // enforce 7 full-shape days even for older routines
+        const normalizedDays = ensure7Days(weekKey, existing.days as any);
+        const before = JSON.stringify(existing.days ?? []);
+        const after = JSON.stringify(normalizedDays);
+        if (before !== after) {
+            existing.days = normalizedDays as any;
+            changed = true;
+        }
+
+        if (changed) await existing.save();
         return existing.toJSON();
     }
 
@@ -625,4 +679,33 @@ export async function patchGymCheckDay(userId: string, weekKey: string, dayKey: 
 
 export async function patchRoutineGymCheckDay(userId: string, weekKey: string, dayKey: DayKey, payload: unknown) {
     return patchGymCheckDay(userId, weekKey, dayKey, payload);
+}
+
+export async function listRoutineWeeks(
+    userId: string,
+    opts?: { status?: "active" | "archived"; limit?: number }
+) {
+    const filter: any = { userId };
+    if (opts?.status) filter.status = opts.status;
+
+    const limit = typeof opts?.limit === "number" ? opts.limit : 20;
+
+    // Return lightweight summaries (no heavy days/attachments)
+    const docs = await WorkoutRoutineWeekModel.find(filter)
+        .sort({ "range.from": -1 }) // newest week first
+        .limit(limit)
+        .select("weekKey range status title split plannedDays createdAt updatedAt")
+        .lean();
+
+    return docs.map((d: any) => ({
+        id: String(d._id),
+        weekKey: d.weekKey,
+        range: d.range,
+        status: d.status,
+        title: d.title ?? null,
+        split: d.split ?? null,
+        plannedDays: d.plannedDays ?? null,
+        createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : undefined,
+        updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : undefined,
+    }));
 }

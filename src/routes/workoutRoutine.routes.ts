@@ -11,6 +11,7 @@ import {
     routineAttachmentUploadQuerySchema,
     routineGymCheckParamsSchema,
     routineGymCheckPatchBodySchema,
+    routineWeeksListQuerySchema,
 } from "../validations/workoutRoutine.schemas";
 import { uploadTrainingMedia } from "../middlewares/cloudinary";
 
@@ -65,6 +66,13 @@ router.patch(
     validate("params", routineGymCheckParamsSchema),
     validate("body", routineGymCheckPatchBodySchema),
     routineController.patchGymCheckForDay
+);
+
+router.get(
+    "/routines/weeks",
+    requireAuth,
+    validate("query", routineWeeksListQuerySchema),
+    routineController.listWeeks
 );
 
 /**

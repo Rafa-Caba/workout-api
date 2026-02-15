@@ -141,3 +141,15 @@ export const routineGymCheckPatchBodySchema = z
         exercises: z.record(z.string(), gymCheckExercisePatchSchema).nullable().optional(),
     })
     .strict();
+
+export const routineWeeksListQuerySchema = z.object({
+    status: z.enum(["active", "archived"]).optional(),
+    limit: z
+        .union([z.number(), z.string()])
+        .optional()
+        .transform((v) => {
+            const n = typeof v === "string" ? Number(v) : v;
+            if (!n || Number.isNaN(n)) return 20;
+            return Math.max(1, Math.min(100, Math.floor(n)));
+        }),
+});

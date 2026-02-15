@@ -7,7 +7,8 @@ import {
     setRoutineArchived,
     upsertRoutineWeek,
     patchRoutineGymCheckDay,
-    patchGymCheckDay
+    patchGymCheckDay,
+    listRoutineWeeks
 } from "../services/workoutRoutine.service";
 
 const getUserIdFromReq = (req: Request): string => String((req as any).user?.id ?? "");
@@ -151,6 +152,18 @@ export const patchWeekRoutineGymCheckDay = async (req: Request, res: Response) =
     if (!out) {
         return res.status(404).json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });
     }
+
+    return res.status(200).json(out);
+};
+
+export const listWeeks = async (req: Request, res: Response) => {
+    const userId = getUserIdFromReq(req);
+    const q: any = (req as any).validatedQuery ?? req.query;
+
+    const out = await listRoutineWeeks(userId, {
+        status: q.status,
+        limit: q.limit,
+    });
 
     return res.status(200).json(out);
 };
