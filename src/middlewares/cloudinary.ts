@@ -74,3 +74,23 @@ export const uploadMovementMedia = multer({
         } as any,
     }),
 });
+
+/**
+ * Upload app logo
+ * field name: "image"
+ */
+export const uploadAppLogo = multer({
+    limits: { fileSize: 10 * 1024 * 1024 },
+    storage: new CloudinaryStorage({
+        cloudinary,
+        params: {
+            folder: "workout/app/logo",
+            allowed_formats: ["jpg", "jpeg", "png", "webp"],
+            public_id: (_req: Request, file: Express.Multer.File) => {
+                const baseName = safeSlug(file.originalname);
+                return `app_logo_${baseName}_${Date.now()}`;
+            },
+            transformation: [{ width: 512, height: 512, crop: "limit" }],
+        } as any,
+    }),
+});

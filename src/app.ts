@@ -4,6 +4,8 @@ import cookieParser from "cookie-parser";
 import env from "./config/env";
 
 import authRoutes from "./routes/auth.routes";
+import adminUserRoutes from "./routes/adminUser.routes";
+import adminSettingsRouter from "./routes/adminSettings.routes";
 import userRoutes from "./routes/user.routes";
 import workoutDayRoutes from "./routes/workoutDay.routes";
 import workoutSessionRoutes from "./routes/workoutSession.routes";
@@ -26,6 +28,8 @@ app.use(cookieParser());
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/api/auth", authRoutes);
+app.use("/api/admin/users", adminUserRoutes);
+app.use("/api/admin/settings", adminSettingsRouter);
 app.use("/api/users", userRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/workout", workoutDayRoutes);

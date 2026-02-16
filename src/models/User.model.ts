@@ -1,4 +1,9 @@
-import mongoose, { Schema, type InferSchemaType, type Model } from "mongoose";
+import mongoose, {
+    Schema,
+    type InferSchemaType,
+    type Model,
+    type HydratedDocument,
+} from "mongoose";
 import { toPublicJson } from "../utils/toPublicJson";
 
 const UnitsSchema = new Schema(
@@ -62,14 +67,17 @@ const UserSchema = new Schema(
     {
         timestamps: true,
         toJSON: {
-            transform: (_doc, ret: any) => toPublicJson(ret, ["passwordHash", "profilePicPublicId"]),
+            transform: (_doc, ret: any) =>
+                toPublicJson(ret, ["passwordHash", "profilePicPublicId"]),
         },
     }
 );
 
-export type UserDocument = InferSchemaType<typeof UserSchema> & {
-    id: string;
-};
+// Tipo base del documento (solo los campos)
+type UserBase = InferSchemaType<typeof UserSchema>;
 
-export const UserModel: Model<UserDocument> =
-    mongoose.models.User || mongoose.model<UserDocument>("User", UserSchema);
+// Documento hidratado de Mongoose (incluye toJSON, save, etc.)
+export type UserDocument = HydratedDocument<UserBase>;
+
+export const UserModel: Model<UserBase> =
+    mongoose.models.User || mongoose.model<UserBase>("User", UserSchema);
