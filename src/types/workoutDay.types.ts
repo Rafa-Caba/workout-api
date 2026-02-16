@@ -49,6 +49,7 @@ export type Exercise = {
 
     name: string;
     movementId: string | null;
+    movementName: string | null;
 
     notes: string | null;
 

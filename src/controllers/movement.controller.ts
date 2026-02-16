@@ -40,7 +40,15 @@ export const create = async (req: Request, res: Response) => {
     const userId = getUserIdFromReq(req);
     const body: any = (req as any).validatedBody ?? req.body;
 
-    const movement = await createMovement({ userId, payload: body });
+    // Archivo subido por uploadMovementMedia.single("media")
+    const mediaFile = (req as any).file as Express.Multer.File | undefined | null;
+
+    const movement = await createMovement({
+        userId,
+        payload: body,
+        mediaFile: mediaFile ?? null,
+    });
+
     return res.status(201).json(movement);
 };
 
@@ -49,7 +57,16 @@ export const update = async (req: Request, res: Response) => {
     const params: any = (req as any).validatedParams ?? req.params;
     const body: any = (req as any).validatedBody ?? req.body;
 
-    const movement = await updateMovement({ userId, id: String(params.id), payload: body });
+    // Archivo subido por uploadMovementMedia.single("media")
+    const mediaFile = (req as any).file as Express.Multer.File | undefined | null;
+
+    const movement = await updateMovement({
+        userId,
+        id: String(params.id),
+        payload: body,
+        mediaFile: mediaFile ?? null,
+    });
+
     if (!movement) {
         return res.status(404).json({
             error: { code: "NOT_FOUND", message: "Movement not found", details: { id: params.id } },

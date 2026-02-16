@@ -5,6 +5,11 @@ const RoutineExerciseSchema = new Schema(
         id: { type: String, required: true, trim: true },
 
         name: { type: String, required: true, trim: true, maxlength: 200 },
+
+        // Movement catalog link + snapshot (Option A)
+        movementId: { type: String, default: null, trim: true, maxlength: 80 },
+        movementName: { type: String, default: null, trim: true, maxlength: 200 },
+
         sets: { type: Number, default: null, min: 0, max: 99 },
         reps: { type: String, default: null, maxlength: 50 },
         rpe: { type: Number, default: null, min: 0, max: 10 },
@@ -48,7 +53,7 @@ const RoutineAttachmentSchema = new Schema(
         meta: { type: Schema.Types.Mixed, default: null },
 
         // Optional but useful for FE labels
-        originalName: { type: String, default: null, maxlength: 300 },
+        originalName: { type: String, default: null, trim: true, maxlength: 300 },
     },
     { _id: false }
 );

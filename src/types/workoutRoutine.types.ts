@@ -8,10 +8,17 @@ export type RoutineDayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun
  * CANONICAL Planned Exercise (routine.days[].exercises[])
  * =========================================================
  * - attachmentPublicIds links to routine.attachments[].publicId
+ * - movementId links to Movements catalog
  */
 export type RoutineExercise = {
     id: string;
+
+    // Canonical label (what you display in routine + history)
     name: string;
+
+    // Movement catalog link + snapshot
+    movementId: string | null;
+    movementName: string | null;
 
     sets: number | null;
     reps: string | null;

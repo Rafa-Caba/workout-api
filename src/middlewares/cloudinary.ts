@@ -53,3 +53,24 @@ export const uploadTrainingMedia = multer({
         } as any,
     }),
 });
+
+/**
+ * Movement media
+ * field name: "media" (single)
+ */
+export const uploadMovementMedia = multer({
+    limits: { fileSize: 100 * 1024 * 1024 },
+    storage: new CloudinaryStorage({
+        cloudinary,
+        params: {
+            folder: "workout/movements",
+            allowed_formats: ["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v"],
+            resource_type: "auto",
+            public_id: (req: Request, file: Express.Multer.File) => {
+                const userId = (req as any).user?.id ?? "unknown";
+                const baseName = safeSlug(file.originalname);
+                return `movement_${userId}_${baseName}_${Date.now()}`;
+            },
+        } as any,
+    }),
+});

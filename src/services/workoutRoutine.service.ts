@@ -1,12 +1,21 @@
 import { randomUUID } from "crypto";
+import mongoose from "mongoose";
 import { WorkoutRoutineWeekModel } from "../models/WorkoutRoutineWeek.model";
+import { assertMovementsExist } from "./movement.service";
+import { MovementModel } from "../models/Movement.model";
+import { GymCheckDayPatch, GymCheckExercisePatch, GymCheckMetricsPatch } from "../types/gymCheck.types"
 
 type DayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
 const DAY_KEYS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 type RoutineExercise = {
-    id: string; // ✅ NEW
+    id: string; // ✅ stable per-exercise id
     name: string;
+
+    // ✅ Movement catalog link + snapshot
+    movementId?: string | null;
+    movementName?: string | null;
+
     sets?: number | null;
     reps?: string | null;
     rpe?: number | null;
@@ -50,23 +59,61 @@ function newId(): string {
     return randomUUID();
 }
 
+function cleanStringOrNull(v: unknown): string | null {
+    if (v === null) return null;
+    if (typeof v !== "string") return null;
+    const s = v.trim();
+    return s.length ? s : null;
+}
+
+function collectMovementIdsFromDays(days?: RoutineDay[] | null): string[] {
+    const out: string[] = [];
+    (days ?? []).forEach((d) => {
+        (d?.exercises ?? []).forEach((e: any) => {
+            const id = cleanStringOrNull(e?.movementId);
+            if (id) out.push(id);
+        });
+    });
+    return out;
+}
+
+async function buildMovementNameMap(args: { userId: string; movementIds: string[] }) {
+    const { userId, movementIds } = args;
+
+    const unique = Array.from(
+        new Set((movementIds ?? []).filter(Boolean).filter((id) => mongoose.Types.ObjectId.isValid(id)))
+    );
+
+    if (unique.length === 0) return new Map<string, string>();
+
+    // ✅ validate first (ensures they belong to this user)
+    await assertMovementsExist({ userId, movementIds: unique });
+
+    const docs = await MovementModel.find({
+        _id: { $in: unique.map((x) => new mongoose.Types.ObjectId(x)) },
+        userId: new mongoose.Types.ObjectId(userId),
+    }).select({ _id: 1, name: 1 });
+
+    const map = new Map<string, string>();
+    docs.forEach((d: any) => map.set(String(d._id), String(d.name ?? "").trim()));
+
+    return map;
+}
+
 /**
  * Normalize one exercise, ensuring stable id.
  * This acts as a migration step for older stored plans without id.
  */
-function normalizeExercise(e: any): RoutineExercise {
+function normalizeExercise(e: any, movementNameById?: Map<string, string>): RoutineExercise {
     const id = typeof e?.id === "string" && e.id.trim() ? e.id.trim() : newId();
 
     const name = String(e?.name ?? "").trim();
 
     const sets = typeof e?.sets === "number" ? e.sets : e?.sets === null ? null : null;
-
     const reps = typeof e?.reps === "string" ? e.reps : e?.reps === null ? null : null;
-
     const rpe = typeof e?.rpe === "number" ? e.rpe : e?.rpe === null ? null : null;
 
     const load = typeof e?.load === "string" ? e.load : e?.load === null ? null : null;
-
     const notes = typeof e?.notes === "string" ? e.notes : e?.notes === null ? null : null;
 
     const attachmentPublicIds = Array.isArray(e?.attachmentPublicIds)
@@ -75,9 +122,19 @@ function normalizeExercise(e: any): RoutineExercise {
             ? null
             : null;
 
+    const movementId = cleanStringOrNull(e?.movementId);
+
+    // ✅ Snapshot movement name from DB whenever possible
+    const dbName = movementId ? (movementNameById?.get(movementId) ?? null) : null;
+
+    // If FE provides movementName, we still prefer DB snapshot to avoid spoofing/drift
+    const movementName = dbName ?? cleanStringOrNull(e?.movementName) ?? (movementId ? (name || null) : null);
+
     return {
         id,
         name,
+        movementId,
+        movementName,
         sets,
         reps,
         rpe,
@@ -113,7 +170,8 @@ function weekKeyToRange(weekKey: string): { from: string; to: string } {
 
 function ensure7Days(
     weekKey: string,
-    incoming?: RoutineDay[] | null
+    incoming?: RoutineDay[] | null,
+    movementNameById?: Map<string, string>
 ): Array<{
     dayKey: DayKey;
     date: string;
@@ -144,7 +202,7 @@ function ensure7Days(
 
         const exercises =
             Array.isArray(raw?.exercises) && raw.exercises.length > 0
-                ? raw.exercises.map((e: any) => normalizeExercise(e))
+                ? raw.exercises.map((e: any) => normalizeExercise(e, movementNameById))
                 : raw?.exercises === null
                     ? null
                     : null;
@@ -190,40 +248,6 @@ export async function getRoutineWeek(userId: string, weekKey: string) {
     return doc ? doc.toJSON() : null;
 }
 
-// export async function initRoutineWeek(
-//     userId: string,
-//     weekKey: string,
-//     opts?: { title?: string; split?: string; unarchive?: boolean }
-// ) {
-//     const existing = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
-//     if (existing) {
-//         if (existing.status === "archived" && opts?.unarchive) {
-//             existing.status = "active";
-//             if (typeof opts.title === "string") existing.title = opts.title;
-//             if (typeof opts.split === "string") existing.split = opts.split;
-//             await existing.save();
-//         }
-//         return existing.toJSON();
-//     }
-
-//     const range = weekKeyToRange(weekKey);
-//     const days = ensure7Days(weekKey, null);
-
-//     const created = await WorkoutRoutineWeekModel.create({
-//         userId,
-//         weekKey,
-//         range,
-//         status: "active",
-//         title: typeof opts?.title === "string" ? opts.title : null,
-//         split: typeof opts?.split === "string" ? opts.split : null,
-//         plannedDays: null,
-//         attachments: [],
-//         days,
-//         meta: null,
-//     });
-
-//     return created.toJSON();
-// }
 export async function initRoutineWeek(
     userId: string,
     weekKey: string,
@@ -247,8 +271,12 @@ export async function initRoutineWeek(
             changed = true;
         }
 
+        // ✅ snapshot movementName for whatever exists in DB already
+        const existingMovementIds = collectMovementIdsFromDays(existing.days as any);
+        const movementNameById = await buildMovementNameMap({ userId, movementIds: existingMovementIds });
+
         // enforce 7 full-shape days even for older routines
-        const normalizedDays = ensure7Days(weekKey, existing.days as any);
+        const normalizedDays = ensure7Days(weekKey, existing.days as any, movementNameById);
         const before = JSON.stringify(existing.days ?? []);
         const after = JSON.stringify(normalizedDays);
         if (before !== after) {
@@ -298,10 +326,22 @@ export async function upsertRoutineWeek(userId: string, weekKey: string, payload
     if ("meta" in payload) doc.meta = payload.meta ?? null;
 
     if (Array.isArray(payload.days)) {
-        // ✅ ensure7Days will normalize exercises and ensure id
-        doc.days = ensure7Days(weekKey, payload.days) as any;
+        const movementIds = collectMovementIdsFromDays(payload.days);
+        const movementNameById = await buildMovementNameMap({ userId, movementIds });
+
+        doc.days = ensure7Days(weekKey, payload.days, movementNameById) as any;
     } else if (payload.day && isRecord(payload.day) && DAY_KEYS.includes(payload.day.dayKey as any)) {
         const current = Array.isArray(doc.days) ? (doc.days as any[]) : [];
+
+        // If exercises are provided in this patch, build a map just for them (optional)
+        let patchMovementNameById: Map<string, string> | undefined = undefined;
+        if ("exercises" in payload.day && Array.isArray(payload.day.exercises)) {
+            const movementIds = (payload.day.exercises ?? [])
+                .map((e: any) => cleanStringOrNull(e?.movementId))
+                .filter(Boolean) as string[];
+
+            patchMovementNameById = await buildMovementNameMap({ userId, movementIds });
+        }
 
         const merged = current.map((d: any) => {
             if (d?.dayKey !== payload.day!.dayKey) return d;
@@ -314,7 +354,9 @@ export async function upsertRoutineWeek(userId: string, weekKey: string, payload
             let nextExercises = d.exercises;
             if ("exercises" in payload.day!) {
                 if (Array.isArray(payload.day!.exercises)) {
-                    nextExercises = payload.day!.exercises.map((e: any) => normalizeExercise(e));
+                    nextExercises = payload.day!.exercises.map((e: any) =>
+                        normalizeExercise(e, patchMovementNameById)
+                    );
                 } else {
                     nextExercises = payload.day!.exercises ?? null;
                 }
@@ -331,8 +373,11 @@ export async function upsertRoutineWeek(userId: string, weekKey: string, payload
             };
         });
 
-        // ✅ ensure7Days will also normalize any leftover missing ids
-        doc.days = ensure7Days(weekKey, merged as any) as any;
+        // Re-snapshot for the whole merged week (and validate all movementIds)
+        const mergedMovementIds = collectMovementIdsFromDays(merged as any);
+        const mergedMovementNameById = await buildMovementNameMap({ userId, movementIds: mergedMovementIds });
+
+        doc.days = ensure7Days(weekKey, merged as any, mergedMovementNameById) as any;
     }
 
     await doc.save();
@@ -476,55 +521,11 @@ export async function deleteRoutineAttachment(
 // Gym Check (sync checklist + day metrics) - persisted in RoutineWeek.meta.gymCheck
 // =========================================================
 
-type GymCheckExercisePatch = {
-    done?: boolean | null;
-    notes?: string | null;
-    durationMin?: number | null;
-    mediaPublicIds?: string[] | null;
-};
-
-type GymCheckMetricsPatch = {
-    startAt?: string | null;
-    endAt?: string | null;
-
-    activeKcal?: number | null;
-    totalKcal?: number | null;
-
-    avgHr?: number | null;
-    maxHr?: number | null;
-
-    distanceKm?: number | null;
-    steps?: number | null;
-    elevationGainM?: number | null;
-
-    paceSecPerKm?: number | null;
-    cadenceRpm?: number | null;
-
-    effortRpe?: number | null;
-
-    trainingSource?: string | null;
-    dayEffortRpe?: number | null;
-};
-
-type GymCheckDayPatch = {
-    durationMin?: number | null;
-    notes?: string | null;
-    metrics?: GymCheckMetricsPatch | null;
-    exercises?: Record<string, GymCheckExercisePatch> | null;
-};
-
 function isPlainObject(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function cleanStringOrNull(v: unknown): string | null {
-    if (typeof v !== "string") return null;
-    const s = v.trim();
-    return s.length ? s : null;
-}
-
 function cleanIsoOrNull(v: unknown): string | null {
-    // accept null or trimmed string; ISO validation is handled upstream (Zod) or later.
     return cleanStringOrNull(v);
 }
 
@@ -613,7 +614,14 @@ function normalizeGymCheckDayPatch(payload: unknown): GymCheckDayPatch {
                 if (!isPlainObject(v)) continue;
 
                 const p: GymCheckExercisePatch = {};
-                if ("done" in v) p.done = typeof (v as any).done === "boolean" ? (v as any).done : (v as any).done === null ? null : undefined;
+                if ("done" in v)
+                    p.done =
+                        typeof (v as any).done === "boolean"
+                            ? (v as any).done
+                            : (v as any).done === null
+                                ? null
+                                : undefined;
+
                 if ("notes" in v) p.notes = cleanStringOrNull((v as any).notes);
                 if ("durationMin" in v) p.durationMin = cleanNumberOrNull((v as any).durationMin);
                 if ("mediaPublicIds" in v) p.mediaPublicIds = cleanStringArrayOrNull((v as any).mediaPublicIds);
@@ -630,7 +638,6 @@ function normalizeGymCheckDayPatch(payload: unknown): GymCheckDayPatch {
 export async function patchGymCheckDay(userId: string, weekKey: string, dayKey: DayKey, payload: unknown) {
     const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
     if (!doc) return null;
-
 
     const patch = normalizeGymCheckDayPatch(payload);
 
@@ -681,10 +688,7 @@ export async function patchRoutineGymCheckDay(userId: string, weekKey: string, d
     return patchGymCheckDay(userId, weekKey, dayKey, payload);
 }
 
-export async function listRoutineWeeks(
-    userId: string,
-    opts?: { status?: "active" | "archived"; limit?: number }
-) {
+export async function listRoutineWeeks(userId: string, opts?: { status?: "active" | "archived"; limit?: number }) {
     const filter: any = { userId };
     if (opts?.status) filter.status = opts.status;
 

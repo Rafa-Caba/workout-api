@@ -1,7 +1,34 @@
 import mongoose from "mongoose";
+import type { Express } from "express";
 import { MovementModel } from "../models/Movement.model";
 
+import { extractCloudinaryInfo } from "../utils/cloudinaryInfo";
+
 const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
+
+function escapeRegExp(input: string): string {
+    return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const SORT_COLLATION = { locale: "en", strength: 2 }; // strength:2 => case-insensitive (A=a)
+
+// Helper para convertir el file de Cloudinary en Movement.media
+function buildMovementMediaFromFile(file: Express.Multer.File | null | undefined) {
+    if (!file) return null;
+
+    const info = extractCloudinaryInfo(file);
+    if (!info) return null;
+
+    return {
+        publicId: info.publicId,
+        url: info.url,
+        resourceType: info.resourceType, // "image" | "video"
+        format: info.format ?? null,
+        createdAt: info.createdAt,
+        originalName: info.originalName ?? null,
+        meta: null,
+    } as any; // el tipo exacto lo define el schema del modelo
+}
 
 export const listMovements = async (args: {
     userId: string;
@@ -14,19 +41,21 @@ export const listMovements = async (args: {
     if (activeOnly === true) filter.isActive = true;
 
     if (q && q.trim()) {
-        const qTrim = q.trim().toLowerCase();
+        const qTrim = q.trim();
+        const rx = new RegExp(escapeRegExp(qTrim), "i");
         filter.$or = [
-            { nameLower: { $regex: qTrim, $options: "i" } },
-            { muscleGroup: { $regex: qTrim, $options: "i" } },
-            { equipment: { $regex: qTrim, $options: "i" } },
+            { name: rx },
+            { nameLower: rx },
+            { muscleGroup: rx },
+            { equipment: rx },
         ];
     }
 
-    const docs = await MovementModel.find(filter).sort({ nameLower: 1 }).lean();
-    // lean() returns plain objects; toPublicJson transform won't run
-    // so we return non-lean for consistent "id" output:
-    const docs2 = await MovementModel.find(filter).sort({ nameLower: 1 });
-    return docs2.map((d) => d.toJSON());
+    const docs = await MovementModel.find(filter)
+        .collation(SORT_COLLATION)
+        .sort({ nameLower: 1 });
+
+    return docs.map((d) => d.toJSON());
 };
 
 export const getMovementById = async (args: { userId: string; id: string }) => {
@@ -49,9 +78,15 @@ export const createMovement = async (args: {
         muscleGroup?: string | null;
         equipment?: string | null;
         isActive?: boolean;
+        // NO esperamos media aquí desde body; viene como file
+        media?: any;
     };
+    mediaFile?: Express.Multer.File | null;
 }) => {
-    const { userId, payload } = args;
+    const { userId, payload, mediaFile } = args;
+
+    const mediaFromFile = buildMovementMediaFromFile(mediaFile);
+    const media = mediaFromFile ?? payload.media ?? null;
 
     try {
         const doc = await MovementModel.create({
@@ -60,25 +95,33 @@ export const createMovement = async (args: {
             muscleGroup: payload.muscleGroup ?? null,
             equipment: payload.equipment ?? null,
             isActive: payload.isActive ?? true,
+            media,
         });
 
         return doc.toJSON();
     } catch (err: any) {
-        // unique constraint
         if (err?.code === 11000) {
+            const keyPattern = err.keyPattern || {};
+            const isNameDup = !!keyPattern.nameLower || !!keyPattern.name;
+
             throw {
                 statusCode: 400,
                 code: "VALIDATION_ERROR",
                 message: "Invalid request body",
                 details: {
                     formErrors: [],
-                    fieldErrors: {
-                        name: ["A movement with this name already exists for this user."],
-                    },
+                    fieldErrors: isNameDup
+                        ? {
+                            name: [
+                                "A movement with this name already exists for this user.",
+                            ],
+                        }
+                        : {
+                            general: ["Duplicate key error on movements collection."],
+                        },
                 },
             };
         }
-        throw err;
     }
 };
 
@@ -90,9 +133,11 @@ export const updateMovement = async (args: {
         muscleGroup?: string | null;
         equipment?: string | null;
         isActive?: boolean;
+        media?: any | null; // permite borrar media con null si lo decides
     };
+    mediaFile?: Express.Multer.File | null;
 }) => {
-    const { userId, id, payload } = args;
+    const { userId, id, payload, mediaFile } = args;
 
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
 
@@ -103,10 +148,24 @@ export const updateMovement = async (args: {
 
     if (!doc) return null;
 
+    // Campos básicos
     if (payload.name !== undefined) doc.name = payload.name;
     if (payload.muscleGroup !== undefined) doc.muscleGroup = payload.muscleGroup;
     if (payload.equipment !== undefined) doc.equipment = payload.equipment;
     if (payload.isActive !== undefined) doc.isActive = payload.isActive;
+
+    // Media:
+    // 1) Si viene file, generamos nuevo media.
+    // 2) Si NO hay file pero payload.media está definido, respetamos ese valor
+    //    (por ejemplo, podrías usarlo para borrar media con null en el futuro).
+    // 3) Si ni file ni payload.media definido -> dejamos doc.media como está.
+    const mediaFromFile = buildMovementMediaFromFile(mediaFile);
+
+    if (mediaFromFile) {
+        (doc as any).media = mediaFromFile;
+    } else if (payload.media !== undefined) {
+        (doc as any).media = payload.media;
+    }
 
     try {
         await doc.save();
@@ -174,7 +233,9 @@ export const assertMovementsExist = async (args: {
             details: {
                 formErrors: [],
                 fieldErrors: {
-                    training: missing.map((m) => `Invalid movementId (not found for this user): ${m}`),
+                    movementId: missing.map(
+                        (m) => `Invalid movementId (not found for this user): ${m}`
+                    ),
                 },
             },
         };

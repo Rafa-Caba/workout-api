@@ -34,7 +34,16 @@ export const routineArchiveQuerySchema = z.object({
 
 const routineExerciseSchema = z.object({
     id: z.string().min(1),
+
+    // Canonical label
     name: z.string().min(1).max(200),
+
+    // ✅ Link to Movement catalog
+    movementId: z.string().min(1).nullable().optional(),
+
+    // ✅ Snapshot (optional, helps history if movement name changes)
+    movementName: z.string().max(200).nullable().optional(),
+
     sets: z.number().min(0).max(99).nullable().optional(),
     reps: z.string().max(50).nullable().optional(),
     rpe: z.number().min(0).max(10).nullable().optional(),
@@ -137,7 +146,6 @@ export const routineGymCheckPatchBodySchema = z
 
         metrics: gymCheckMetricsPatchSchema.nullable().optional(),
 
-        // ✅ Zod v4: record(keyType, valueType)
         exercises: z.record(z.string(), gymCheckExercisePatchSchema).nullable().optional(),
     })
     .strict();
