@@ -16,7 +16,9 @@ const EnvSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default("30d"),
 
   // CORS (CSV list)
-  CORS_ORIGINS: z.string().default("http://localhost:5173"),
+  CORS_ORIGINS: z
+    .string()
+    .default("http://localhost:5173,https://workout-app-cabanillas.vercel.app"),
 
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: z.string().min(1, "CLOUDINARY_CLOUD_NAME is required"),

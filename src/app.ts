@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import { corsOptions } from "./config/cors";
 import cookieParser from "cookie-parser";
 import env from "./config/env";
 
@@ -21,7 +22,7 @@ import { errorHandler } from "./middlewares/errorHandler";
 
 const app = express();
 
-app.use(cors({ origin: env.CORS_ORIGINS, credentials: true }));
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());
 
