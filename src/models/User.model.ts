@@ -73,11 +73,17 @@ const UserSchema = new Schema(
     }
 );
 
-// Tipo base del documento (solo los campos)
+// Base de campos del schema
 type UserBase = InferSchemaType<typeof UserSchema>;
 
-// Documento hidratado de Mongoose (incluye toJSON, save, etc.)
-export type UserDocument = HydratedDocument<UserBase>;
+// Documento hidratado de Mongoose, con `id` y `toJSON`
+export type UserDocument = HydratedDocument<UserBase> & {
+    id: string;
+};
 
-export const UserModel: Model<UserBase> =
-    mongoose.models.User || mongoose.model<UserBase>("User", UserSchema);
+// Tipo JSON público (lo que sale de `toJSON`)
+export type UserJSON = ReturnType<UserDocument["toJSON"]>;
+
+// Modelo
+export const UserModel: Model<UserDocument> =
+    mongoose.models.User || mongoose.model<UserDocument>("User", UserSchema);
