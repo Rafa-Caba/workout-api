@@ -65,28 +65,37 @@ const maxNullable = (values: Array<number | null>): number | null => {
 };
 
 const buildSleepSummaryFromDay = (day: any): SummarySleep | null => {
-    // We try a few common shapes:
-    // - day.sleep: { totalMinutes/timeAsleepMinutes, awakeMinutes, remMinutes, coreMinutes, deepMinutes, score }
-    // - day.sleep: { timeAsleep: "6 hr 29 min", awake: 7, rem: "2 hr 6 min", core: "...", deep: "...", score: 90 }
     const sleep = day?.sleep ?? day?.sleepSummary ?? null;
     if (!sleep || typeof sleep !== "object") return null;
 
-    const totalMinutes =
+    const timeAsleepMinutes =
         parseMinutesLoose((sleep as any).totalMinutes) ??
         parseMinutesLoose((sleep as any).timeAsleepMinutes) ??
         parseMinutesLoose((sleep as any).timeAsleep);
 
-    const awakeMinutes = parseMinutesLoose((sleep as any).awakeMinutes) ?? parseMinutesLoose((sleep as any).awake);
-    const remMinutes = parseMinutesLoose((sleep as any).remMinutes) ?? parseMinutesLoose((sleep as any).rem);
-    const coreMinutes = parseMinutesLoose((sleep as any).coreMinutes) ?? parseMinutesLoose((sleep as any).core);
-    const deepMinutes = parseMinutesLoose((sleep as any).deepMinutes) ?? parseMinutesLoose((sleep as any).deep);
+    const timeInBedMinutes =
+        parseMinutesLoose((sleep as any).timeInBedMinutes) ??
+        parseMinutesLoose((sleep as any).inBedMinutes) ??
+        parseMinutesLoose((sleep as any).timeInBed);
+
+    const awakeMinutes =
+        parseMinutesLoose((sleep as any).awakeMinutes) ?? parseMinutesLoose((sleep as any).awake);
+
+    const remMinutes =
+        parseMinutesLoose((sleep as any).remMinutes) ?? parseMinutesLoose((sleep as any).rem);
+
+    const coreMinutes =
+        parseMinutesLoose((sleep as any).coreMinutes) ?? parseMinutesLoose((sleep as any).core);
+
+    const deepMinutes =
+        parseMinutesLoose((sleep as any).deepMinutes) ?? parseMinutesLoose((sleep as any).deep);
 
     const scoreRaw = (sleep as any).score ?? (sleep as any).sleepScore ?? null;
     const score = isNumber(scoreRaw) ? scoreRaw : typeof scoreRaw === "string" ? Number(scoreRaw) : null;
 
-    // If we have *none* of the useful fields, treat it as absent.
     const hasAny =
-        totalMinutes !== null ||
+        timeAsleepMinutes !== null ||
+        timeInBedMinutes !== null ||
         awakeMinutes !== null ||
         remMinutes !== null ||
         coreMinutes !== null ||
@@ -96,7 +105,8 @@ const buildSleepSummaryFromDay = (day: any): SummarySleep | null => {
     if (!hasAny) return null;
 
     return {
-        totalMinutes,
+        timeAsleepMinutes,
+        timeInBedMinutes,
         awakeMinutes,
         remMinutes,
         coreMinutes,
@@ -104,6 +114,7 @@ const buildSleepSummaryFromDay = (day: any): SummarySleep | null => {
         score: isNumber(score) ? score : null,
     };
 };
+
 
 const buildTrainingTotalsFromDay = (day: any): SummaryTrainingTotals => {
     const sessions: any[] = (day?.training?.sessions ?? []).filter(Boolean);
@@ -234,7 +245,7 @@ export const getRangeSummary = async (userId: string, from: ISODate, to: ISODate
     const sleepSummaries = days.map((d) => buildSleepSummaryFromDay(d)).filter(Boolean) as SummarySleep[];
     const daysWithSleep = sleepSummaries.length;
 
-    const avgTotalMinutes = avgNullable(sleepSummaries.map((s) => s.totalMinutes));
+    const avgTotalMinutes = avgNullable(sleepSummaries.map((s) => s.timeAsleepMinutes));
     const avgDeepMinutes = avgNullable(sleepSummaries.map((s) => s.deepMinutes));
     const avgRemMinutes = avgNullable(sleepSummaries.map((s) => s.remMinutes));
     const avgScore = avgNullable(sleepSummaries.map((s) => s.score));
@@ -328,7 +339,7 @@ export const getWeeksTrend = async (
             const sleepSummaries = ds.map((d) => buildSleepSummaryFromDay(d)).filter(Boolean) as SummarySleep[];
             const daysWithSleep = sleepSummaries.length;
 
-            const avgTotalMinutes = avgNullable(sleepSummaries.map((s) => s.totalMinutes));
+            const avgTotalMinutes = avgNullable(sleepSummaries.map((s) => s.timeAsleepMinutes));
             const avgDeepMinutes = avgNullable(sleepSummaries.map((s) => s.deepMinutes));
             const avgRemMinutes = avgNullable(sleepSummaries.map((s) => s.remMinutes));
             const avgScore = avgNullable(sleepSummaries.map((s) => s.score));

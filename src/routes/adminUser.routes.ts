@@ -42,6 +42,9 @@ router.patch(
     asyncHandler(adminUserController.updateUserPassword)
 );
 
+// DELETE /api/admin/users/:id/purge  (hard delete + cascade)
+router.delete("/:id/purge", asyncHandler(adminUserController.purgeUser));
+
 // DELETE /api/admin/users/:id
 router.delete("/:id", asyncHandler(adminUserController.deleteUser));
 

@@ -2,12 +2,13 @@ export type ISODate = string; // YYYY-MM-DD
 export type WeekKey = string; // YYYY-W##
 
 export type SummarySleep = {
-    totalMinutes: number | null;
+    timeAsleepMinutes: number | null;
+    timeInBedMinutes: number | null;
+    score: number | null;
     awakeMinutes: number | null;
     remMinutes: number | null;
     coreMinutes: number | null;
     deepMinutes: number | null;
-    score: number | null;
 };
 
 export type SummaryTrainingTotals = {

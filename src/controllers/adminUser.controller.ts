@@ -2,6 +2,15 @@ import type { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { UserModel } from "../models/User.model";
 import type { UserDocument } from "../models/User.model";
+
+import { AppSettingsModel } from "../models/AppSettings.model";
+import { MovementModel } from "../models/Movement.model";
+import { RefreshTokenModel } from "../models/RefreshToken.model";
+import { UserMetricModel } from "../models/UserMetric.model";
+import { UserSettingsModel } from "../models/UserSettings.model";
+import { WorkoutDayModel } from "../models/WorkoutDay.model";
+import { WorkoutRoutineWeekModel } from "../models/WorkoutRoutineWeek.model";
+
 import {
     adminListUsersQuerySchema,
     type AdminListUsersQuery,
@@ -9,6 +18,7 @@ import {
     type AdminUpdateUserInput,
     type AdminUpdatePasswordInput,
 } from "../validations/adminUser.schemas";
+
 import type {
     AdminUserListResponse,
     AdminUserListItem,
@@ -243,7 +253,6 @@ export async function updateUserPassword(req: Request, res: Response) {
 /**
  * DELETE /api/admin/users/:id
  * Soft delete by default: set isActive = false.
- * If you want hard delete, you can swap implementation.
  */
 export async function deleteUser(req: Request, res: Response) {
     const { id } = req.params;
@@ -257,5 +266,102 @@ export async function deleteUser(req: Request, res: Response) {
     return res.json({
         id: user.id,
         message: "User deactivated",
+    });
+}
+
+/**
+ * DELETE /api/admin/users/:id/purge
+ * Hard delete + cascade cleanup for user-owned data.
+ *
+ * Returns a cleanup report so FE can show what was removed.
+ */
+export async function purgeUser(req: Request, res: Response) {
+    const { id } = req.params;
+
+    // Ensure user exists first (404 if missing)
+    const user = await findUserOrThrow(id);
+
+    // Safety rail: prevent purging yourself (requires verifyToken setting req.user)
+    const requesterId = (req as any)?.user?.id as string | undefined;
+    if (requesterId && requesterId === user.id) {
+        throw {
+            statusCode: 400,
+            code: "CANNOT_PURGE_SELF",
+            message: "No puedes purgar tu propio usuario.",
+        };
+    }
+
+    type CleanupItem = { model: string; deletedCount: number };
+    const cleanup: CleanupItem[] = [];
+
+    /**
+     * Helper: deleteMany using the first matching user reference field.
+     * This avoids losing functionality if different models use different fields.
+     */
+    async function deleteByUserRef(
+        modelName: string,
+        model: any,
+        userId: string,
+        candidateFields: string[]
+    ) {
+        // Find the first field that exists in the schema
+        const schemaPaths = model?.schema?.paths ? Object.keys(model.schema.paths) : [];
+        const field = candidateFields.find((f) => schemaPaths.includes(f));
+
+        if (!field) {
+            // Model doesn't have a known user ref field; do nothing safely.
+            cleanup.push({ model: modelName, deletedCount: 0 });
+            return;
+        }
+
+        const result = await model.deleteMany({ [field]: userId }).exec();
+        cleanup.push({
+            model: modelName,
+            deletedCount: typeof result?.deletedCount === "number" ? result.deletedCount : 0,
+        });
+    }
+
+    // These are the most common names; keep this list conservative and safe.
+    const userRefFields = ["userId", "user", "ownerId", "createdBy", "authorId"];
+
+    // 1) Tokens / settings / metrics
+    await deleteByUserRef("RefreshToken", RefreshTokenModel, user.id, userRefFields);
+    await deleteByUserRef("UserMetric", UserMetricModel, user.id, userRefFields);
+    await deleteByUserRef("UserSettings", UserSettingsModel, user.id, userRefFields);
+
+    // 2) Workout data
+    await deleteByUserRef("WorkoutDay", WorkoutDayModel, user.id, userRefFields);
+    await deleteByUserRef("WorkoutRoutineWeek", WorkoutRoutineWeekModel, user.id, userRefFields);
+
+    /**
+     * 3) AppSettings y Movement:
+     * - OJO: si AppSettings es GLOBAL (una sola config para toda la app), NO debe borrarse aquí.
+     * - Lo dejo en modo "seguro": solo borra si el esquema tiene un campo userRef conocido.
+     */
+    cleanup.push({ model: "AppSettings", deletedCount: 0 });
+
+    /**
+     * Movement:
+     * - Si Movement es catálogo global, no se borra (al no tener user ref no hará nada).
+     * - Si Movement es por usuario, se borrará con el campo correcto.
+     */
+    await deleteByUserRef("Movement", MovementModel, user.id, userRefFields);
+
+    // 4) Finally, delete user (hard delete)
+    const userDel = await UserModel.deleteOne({ _id: user._id }).exec();
+    cleanup.push({
+        model: "User",
+        deletedCount: typeof userDel?.deletedCount === "number" ? userDel.deletedCount : 0,
+    });
+
+    const totalDeleted = cleanup.reduce((sum, i) => sum + i.deletedCount, 0);
+
+    return res.json({
+        id: user.id,
+        message: "User purged successfully",
+        cleanup: {
+            items: cleanup,
+            totalDeleted,
+        },
     });
 }

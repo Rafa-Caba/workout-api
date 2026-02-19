@@ -267,6 +267,7 @@ export const computeSleepSummary = (day: any) => {
 
     const hasAny =
         s.timeAsleepMinutes != null ||
+        s.timeInBedMinutes != null ||
         s.score != null ||
         s.awakeMinutes != null ||
         s.remMinutes != null ||
@@ -277,6 +278,7 @@ export const computeSleepSummary = (day: any) => {
 
     return {
         timeAsleepMinutes: s.timeAsleepMinutes ?? null,
+        timeInBedMinutes: s.timeInBedMinutes ?? null,
         score: s.score ?? null,
         awakeMinutes: s.awakeMinutes ?? null,
         remMinutes: s.remMinutes ?? null,

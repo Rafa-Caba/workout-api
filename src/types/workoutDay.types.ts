@@ -14,6 +14,7 @@ export type MediaItem = {
 
 export type SleepBlock = {
     timeAsleepMinutes: number | null;
+    timeInBedMinutes: number | null;
     score: number | null;
     awakeMinutes: number | null;
     remMinutes: number | null;
@@ -160,6 +161,7 @@ export type TrainingTypeTotals = {
 
 export type SleepSummary = {
     timeAsleepMinutes: number | null;
+    timeInBedMinutes: number | null;
     score: number | null;
     awakeMinutes: number | null;
     remMinutes: number | null;

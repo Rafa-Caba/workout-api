@@ -120,6 +120,9 @@ const TrainingBlockSchema = new Schema(
 const SleepBlockSchema = new Schema(
     {
         timeAsleepMinutes: { type: Number, default: null, min: 0 },
+
+        timeInBedMinutes: { type: Number, default: null, min: 0 },
+
         score: { type: Number, default: null, min: 0, max: 100 },
 
         awakeMinutes: { type: Number, default: null, min: 0 },
