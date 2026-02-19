@@ -17,6 +17,7 @@ import workoutInsightsRoutes from "./routes/workoutInsights.routes";
 import workoutExportRoutes from "./routes/workoutExport.routes";
 import movementRoutes from "./routes/movement.routes";
 import settingsRoutes from "./routes/settings.routes";
+import publicAppSettingsRoutes from "./routes/publicAppSettings.routes";
 
 import { errorHandler } from "./middlewares/errorHandler";
 
@@ -40,6 +41,7 @@ app.use("/api/workout", workoutRoutineRoutes);
 app.use("/api/workout", workoutSummaryRoutes);
 app.use("/api/workout", workoutInsightsRoutes);
 app.use("/api/workout", workoutExportRoutes);
+app.use("/api/app-settings", publicAppSettingsRoutes);
 app.use("/api", movementRoutes);
 
 app.use(errorHandler);
