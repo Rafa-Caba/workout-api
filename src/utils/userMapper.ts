@@ -1,4 +1,4 @@
-import type { PublicUser } from "../types/auth.types";
+import type { CoachMode, PublicUser } from "../types/auth.types";
 
 // Minimal shape we need from the Mongoose doc JSON
 type UserJSON = {
@@ -17,6 +17,9 @@ type UserJSON = {
     birthDate?: string | null;
     activityGoal?: PublicUser["activityGoal"];
     timezone?: string | null;
+
+    coachMode: CoachMode;
+    assignedTrainer: string | null;
 
     createdAt?: Date | string;
     updatedAt?: Date | string;
@@ -45,6 +48,9 @@ export const toPublicUser = (u: UserJSON): PublicUser => {
         birthDate: u.birthDate ?? null,
         activityGoal: u.activityGoal ?? null,
         timezone: u.timezone ?? null,
+
+        coachMode: u.coachMode ?? null,
+        assignedTrainer: u.assignedTrainer ?? null,
 
         createdAt: toIsoString(u.createdAt),
         updatedAt: toIsoString(u.updatedAt),
