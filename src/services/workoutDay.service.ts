@@ -432,8 +432,7 @@ export const getCalendarInRange = async (
 
     const dates = opts.fillMissingDays ? enumerateDays(from, to) : Array.from(byDate.keys()).sort();
 
-    // Always expose resolved fields in response
-    const resolvedFields = fields ?? Array.from(DEFAULT_FIELDS_ALL);
+    const effectiveFields = fields ?? Array.from(DEFAULT_FIELDS_ALL);
 
     const builtDays = dates.map((date) => {
         const day =
@@ -443,19 +442,26 @@ export const getCalendarInRange = async (
                 weekKey: getWeekKeyFromISODate(date),
                 sleep: null,
                 training: null,
+                plannedRoutine: null,
+                plannedMeta: null,
                 notes: null,
                 tags: null,
                 meta: null,
             } as any);
 
-        const full = buildCalendarDay(day, { ...opts, fields } as BuildOpts, getWeekKeyFromISODate);
-        return pickFields(full, fields);
+        const full = buildCalendarDay(
+            day,
+            { ...opts, fields: effectiveFields } as BuildOpts,
+            getWeekKeyFromISODate
+        );
+
+        return pickFields(full, effectiveFields);
     });
 
     const response: any = {
         from,
         to,
-        fields: resolvedFields,
+        fields: effectiveFields,
         fillMissingDays: opts.fillMissingDays,
         days: builtDays,
     };
@@ -468,6 +474,8 @@ export const getCalendarInRange = async (
                     weekKey: getWeekKeyFromISODate(date),
                     sleep: null,
                     training: null,
+                    plannedRoutine: null,
+                    plannedMeta: null,
                     notes: null,
                     tags: null,
                     meta: null,

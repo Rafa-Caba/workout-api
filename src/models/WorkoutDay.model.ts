@@ -136,15 +136,103 @@ const SleepBlockSchema = new Schema(
     { _id: false }
 );
 
+/**
+ * Planned routine (trainer-owned / template-owned) - mirrors routine-day shape.
+ */
+const PlannedRoutineExerciseSchema = new Schema(
+    {
+        id: { type: String, required: true, trim: true, maxlength: 80 },
+
+        name: { type: String, required: true, trim: true, maxlength: 200 },
+
+        movementId: { type: String, default: null, trim: true, maxlength: 80 },
+        movementName: { type: String, default: null, trim: true, maxlength: 200 },
+
+        sets: { type: Number, default: null, min: 0, max: 99 },
+        reps: { type: String, default: null, maxlength: 50 },
+        rpe: { type: Number, default: null, min: 0, max: 10 },
+
+        load: { type: String, default: null, maxlength: 100 },
+        notes: { type: String, default: null, maxlength: 1000 },
+
+        attachmentPublicIds: { type: [String], default: null },
+    },
+    { _id: false }
+);
+
+const PlannedRoutineSchema = new Schema(
+    {
+        sessionType: { type: String, default: null, maxlength: 200 },
+        focus: { type: String, default: null, maxlength: 500 },
+        exercises: { type: [PlannedRoutineExerciseSchema], default: null },
+
+        notes: { type: String, default: null, maxlength: 5000 },
+        tags: { type: [String], default: null },
+    },
+    { _id: false }
+);
+
+const PlannedMetaSchema = new Schema(
+    {
+        plannedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+        plannedAt: { type: String, required: true }, // ISO datetime string
+        source: { type: String, enum: ["trainer", "template"], default: null },
+    },
+    { _id: false }
+);
+
 const WorkoutDaySchema = new Schema(
     {
-        userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+        userId: {
+            type: Schema.Types.ObjectId,
+            ref: "User",
+            required: true,
+            index: true,
+        },
 
         date: { type: String, required: true, index: true }, // YYYY-MM-DD
         weekKey: { type: String, required: true, index: true }, // e.g. 2026-W03
 
         sleep: { type: SleepBlockSchema, default: null },
+
+        /**
+         * Actual training (trainee-owned). Kept as-is (existing field).
+         */
         training: { type: TrainingBlockSchema, default: null },
+
+        /**
+         * Planned routine (trainer-owned / template-owned).
+         */
+        plannedRoutine: {
+            type: PlannedRoutineSchema,
+            default: null,
+            validate: {
+                // MVP locking rule:
+                // If actual training exists for that day, block overwrite of plannedRoutine
+                // (allow on new doc creation; block on modifications to plannedRoutine).
+                validator: function (this: any, _v: unknown) {
+                    const hasActualTraining =
+                        !!this.training &&
+                        (Array.isArray(this.training.sessions)
+                            ? this.training.sessions.length > 0
+                            : true);
+
+                    if (!hasActualTraining) return true;
+
+                    // If actual training exists, do not allow changing plannedRoutine
+                    // once the document already exists.
+                    if (!this.isNew && this.isModified("plannedRoutine")) {
+                        return false;
+                    }
+
+                    return true;
+                },
+                message:
+                    "plannedRoutine cannot be overwritten when actual training exists for this day.",
+            },
+        },
+
+        plannedMeta: { type: PlannedMetaSchema, default: null },
 
         notes: { type: String, default: null, maxlength: 10000 },
         tags: { type: [String], default: null },
@@ -188,4 +276,5 @@ export type WorkoutDayDocument = InferSchemaType<typeof WorkoutDaySchema> & {
 };
 
 export const WorkoutDayModel: Model<WorkoutDayDocument> =
-    mongoose.models.WorkoutDay || mongoose.model<WorkoutDayDocument>("WorkoutDay", WorkoutDaySchema);
+    mongoose.models.WorkoutDay ||
+    mongoose.model<WorkoutDayDocument>("WorkoutDay", WorkoutDaySchema);

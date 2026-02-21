@@ -271,7 +271,7 @@ export async function initRoutineWeek(
             changed = true;
         }
 
-        // ✅ snapshot movementName for whatever exists in DB already
+        // snapshot movementName for whatever exists in DB already
         const existingMovementIds = collectMovementIdsFromDays(existing.days as any);
         const movementNameById = await buildMovementNameMap({ userId, movementIds: existingMovementIds });
 

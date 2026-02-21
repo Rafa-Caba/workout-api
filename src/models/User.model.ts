@@ -63,6 +63,49 @@ const UserSchema = new Schema(
         timezone: { type: String, default: null },
 
         lastLoginAt: { type: Date, default: null },
+
+        /**
+         * Trainer/Trainee coaching relationship (minimal changes).
+         * - coachMode: NONE | TRAINER | TRAINEE
+         * - assignedTrainer: required when TRAINEE, otherwise must be null
+         *
+         * NOTE: We enforce cross-field consistency using schema validators
+         * (no schema.pre hooks) to avoid TS overload issues in some mongoose setups.
+         */
+        coachMode: {
+            type: String,
+            enum: ["NONE", "TRAINER", "TRAINEE"],
+            default: "NONE",
+            index: true,
+            validate: {
+                // Cross-field rule enforced at schema level.
+                validator: function (this: any, v: "NONE" | "TRAINER" | "TRAINEE") {
+                    const assignedTrainer = this.assignedTrainer ?? null;
+                    if (v === "TRAINEE") return !!assignedTrainer;
+                    return assignedTrainer === null;
+                },
+                message:
+                    'Invalid coaching state: assignedTrainer is required when coachMode is "TRAINEE", otherwise it must be null.',
+            },
+        },
+
+        assignedTrainer: {
+            type: Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+            index: true, // fast trainee lookup by trainer
+            validate: {
+                // Mirror validation for clearer field-level errors.
+                validator: function (this: any, v: unknown) {
+                    const coachMode: "NONE" | "TRAINER" | "TRAINEE" =
+                        this.coachMode ?? "NONE";
+                    if (coachMode === "TRAINEE") return !!v;
+                    return v === null;
+                },
+                message:
+                    'Invalid assignedTrainer: required when coachMode is "TRAINEE", otherwise must be null.',
+            },
+        },
     },
     {
         timestamps: true,

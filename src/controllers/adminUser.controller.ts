@@ -1,367 +1,313 @@
+// src/controllers/adminUser.controller.ts
 import type { Request, Response } from "express";
+import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+
 import { UserModel } from "../models/User.model";
-import type { UserDocument } from "../models/User.model";
-
-import { AppSettingsModel } from "../models/AppSettings.model";
-import { MovementModel } from "../models/Movement.model";
-import { RefreshTokenModel } from "../models/RefreshToken.model";
-import { UserMetricModel } from "../models/UserMetric.model";
-import { UserSettingsModel } from "../models/UserSettings.model";
-import { WorkoutDayModel } from "../models/WorkoutDay.model";
-import { WorkoutRoutineWeekModel } from "../models/WorkoutRoutineWeek.model";
-
-import {
-    adminListUsersQuerySchema,
-    type AdminListUsersQuery,
-    type AdminCreateUserInput,
-    type AdminUpdateUserInput,
-    type AdminUpdatePasswordInput,
-} from "../validations/adminUser.schemas";
 
 import type {
-    AdminUserListResponse,
-    AdminUserListItem,
-} from "../types/adminUser.types";
+    AdminCreateUserInput,
+    AdminUpdateUserInput,
+    AdminUpdatePasswordInput,
+    AdminListUsersQuery,
+} from "../validations/adminUser.schemas";
 
 /**
- * Helper: map UserDocument to the public shape used in admin list.
- * Relies on Mongoose toJSON + toPublicJson to hide sensitive fields.
+ * Helpers
  */
-function toAdminUserListItem(doc: UserDocument): AdminUserListItem {
-    const json = doc.toJSON() as any;
 
-    return {
-        id: json.id,
-        name: json.name,
-        email: json.email,
-        role: json.role,
-        sex: json.sex,
-        isActive: json.isActive,
-        lastLoginAt: json.lastLoginAt ?? null,
-        createdAt: json.createdAt,
-        updatedAt: json.updatedAt,
-        profilePicUrl: json.profilePicUrl ?? null,
-    };
+function toStatus(e: any): number | null {
+    return e?.statusCode ?? e?.status ?? e?.response?.status ?? null;
+}
+
+function parseIsActive(raw: unknown): boolean | undefined {
+    if (raw === undefined) return undefined;
+    if (raw === "true" || raw === true) return true;
+    if (raw === "false" || raw === false) return false;
+    return undefined;
+}
+
+function toObjectIdOrNull(v: unknown): mongoose.Types.ObjectId | null {
+    if (v === null) return null;
+    if (typeof v !== "string") return null;
+    if (!/^[a-fA-F0-9]{24}$/.test(v)) return null;
+    return new mongoose.Types.ObjectId(v);
+}
+
+async function assertTrainerExists(trainerId: mongoose.Types.ObjectId) {
+    const trainer = await UserModel.findById(trainerId)
+        .select("_id coachMode")
+        .lean()
+        .exec();
+
+    if (!trainer) {
+        throw {
+            statusCode: 400,
+            code: "ASSIGNED_TRAINER_NOT_FOUND",
+            message: "Assigned trainer not found",
+        };
+    }
+
+    // MVP rule: only allow assigning a user that is actually a TRAINER
+    if ((trainer as any).coachMode !== "TRAINER") {
+        throw {
+            statusCode: 400,
+            code: "ASSIGNED_TRAINER_INVALID",
+            message: 'Assigned trainer must have coachMode "TRAINER"',
+        };
+    }
 }
 
 /**
  * GET /api/admin/users
- * List users with optional filters and pagination.
+ * Supports filters: q, role, isActive (manual parse), coachMode
  */
 export async function listUsers(req: Request, res: Response) {
-    const base = adminListUsersQuerySchema.parse(req.query);
+    const qv = ((req as any).validatedQuery ?? req.query) as AdminListUsersQuery;
 
-    const isActiveStr =
-        typeof req.query.isActive === "string"
-            ? (req.query.isActive as string)
-            : undefined;
-    const isActive =
-        isActiveStr === "true"
-            ? true
-            : isActiveStr === "false"
-                ? false
-                : undefined;
+    const page = Math.max(1, Number(qv.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Number(qv.limit ?? 20)));
+    const skip = (page - 1) * limit;
 
-    const query: AdminListUsersQuery = {
-        ...base,
-        isActive,
-    };
-
-    const page =
-        Number.isFinite(query.page) && query.page > 0 ? query.page : 1;
-    const limit =
-        Number.isFinite(query.limit) &&
-            query.limit > 0 &&
-            query.limit <= 100
-            ? query.limit
-            : 20;
+    const isActive = parseIsActive((req.query as any).isActive);
 
     const filter: Record<string, any> = {};
 
-    if (query.role) {
-        filter.role = query.role;
+    if (qv.role) filter.role = qv.role;
+    if (qv.coachMode) filter.coachMode = qv.coachMode;
+    if (isActive !== undefined) filter.isActive = isActive;
+
+    if (qv.q) {
+        const q = String(qv.q).trim();
+        filter.$or = [
+            { name: { $regex: q, $options: "i" } },
+            { email: { $regex: q, $options: "i" } },
+        ];
     }
 
-    if (typeof query.isActive === "boolean") {
-        filter.isActive = query.isActive;
-    }
-
-    if (query.q) {
-        const regex = new RegExp(query.q, "i");
-        filter.$or = [{ name: regex }, { email: regex }];
-    }
-
-    const skip = (page - 1) * limit;
-
-    const [docs, total] = await Promise.all([
-        UserModel.find(filter)
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .exec(),
+    const [items, total] = await Promise.all([
+        UserModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
         UserModel.countDocuments(filter).exec(),
     ]);
 
-    const items: AdminUserListItem[] = docs.map(toAdminUserListItem);
+    // console.log({ trainers: items.filter(trainer => trainer.coachMode === 'TRAINER') });
 
-    const payload: AdminUserListResponse = {
-        items,
+    return res.json({
         page,
         limit,
         total,
-    };
-
-    return res.json(payload);
+        items: items.map((d) => d.toJSON()),
+    });
 }
 
 /**
- * Helper: ensure a user exists or throw 404.
+ * POST /api/admin/users
  */
-async function findUserOrThrow(id: string): Promise<UserDocument> {
-    const user = await UserModel.findById(id).exec();
-    if (!user) {
-        throw {
-            statusCode: 404,
-            code: "USER_NOT_FOUND",
-            message: "User not found",
-        };
+export async function createUser(req: Request, res: Response) {
+    const body = (req as any).validatedBody as AdminCreateUserInput;
+
+    const passwordHash = await bcrypt.hash(body.password, 10);
+
+    const coachMode = body.coachMode ?? "NONE";
+
+    // Normalize assignedTrainer to ObjectId/null
+    const assignedTrainerId = body.assignedTrainer
+        ? toObjectIdOrNull(body.assignedTrainer)
+        : null;
+
+    if (coachMode === "TRAINEE") {
+        if (!assignedTrainerId) {
+            throw {
+                statusCode: 400,
+                code: "INVALID_COACHING_STATE",
+                message: 'assignedTrainer is required when coachMode is "TRAINEE"',
+            };
+        }
+        await assertTrainerExists(assignedTrainerId);
     }
-    return user;
+
+    // For NONE/TRAINER always force null, even if client tries to send something
+    const normalizedAssignedTrainer =
+        coachMode === "TRAINEE" ? assignedTrainerId : null;
+
+    const doc = await UserModel.create({
+        name: body.name,
+        email: body.email,
+        passwordHash,
+
+        role: body.role ?? "user",
+        sex: body.sex ?? null,
+        isActive: body.isActive ?? true,
+
+        profilePicUrl: body.profilePicUrl ?? null,
+
+        heightCm: body.heightCm ?? null,
+        currentWeightKg: body.currentWeightKg ?? null,
+        units: body.units ?? null,
+
+        birthDate: body.birthDate ?? null,
+        activityGoal: body.activityGoal ?? null,
+        timezone: body.timezone ?? null,
+
+        coachMode,
+        assignedTrainer: normalizedAssignedTrainer,
+    });
+
+    return res.status(201).json(doc.toJSON());
 }
 
 /**
  * GET /api/admin/users/:id
  */
 export async function getUserById(req: Request, res: Response) {
-    const { id } = req.params;
+    const id = String(req.params.id);
 
-    const user = await findUserOrThrow(id);
-    return res.json(user.toJSON());
-}
-
-/**
- * POST /api/admin/users
- * Create user with admin privileges.
- */
-export async function createUser(req: Request, res: Response) {
-    const body = req.body as AdminCreateUserInput;
-
-    const existing = await UserModel.findOne({ email: body.email })
-        .lean()
-        .exec();
-    if (existing) {
-        throw {
-            statusCode: 400,
-            code: "EMAIL_TAKEN",
-            message: "A user with this email already exists.",
-        };
+    const doc = await UserModel.findById(id).exec();
+    if (!doc) {
+        throw { statusCode: 404, code: "NOT_FOUND", message: "User not found" };
     }
 
-    const passwordHash = await bcrypt.hash(body.password, 10);
-
-    const user = await UserModel.create({
-        name: body.name,
-        email: body.email,
-        passwordHash,
-        role: body.role ?? "user",
-        sex: body.sex ?? null,
-        isActive: body.isActive ?? true,
-        heightCm: body.heightCm ?? null,
-        currentWeightKg: body.currentWeightKg ?? null,
-        units: body.units ?? null,
-        birthDate: body.birthDate ?? null,
-        activityGoal: body.activityGoal ?? null,
-        timezone: body.timezone ?? null,
-    });
-
-    return res.status(201).json(user.toJSON());
+    return res.json(doc.toJSON());
 }
 
 /**
  * PATCH /api/admin/users/:id
- * Update editable user fields (not password).
  */
 export async function updateUser(req: Request, res: Response) {
-    const { id } = req.params;
-    const body = req.body as AdminUpdateUserInput;
+    const id = String(req.params.id);
+    const body = (req as any).validatedBody as AdminUpdateUserInput;
 
-    const user = await findUserOrThrow(id);
-
-    // if email is changing, ensure uniqueness
-    if (body.email && body.email !== user.email) {
-        const emailExists = await UserModel.findOne({
-            email: body.email,
-            _id: { $ne: id },
-        })
-            .lean()
-            .exec();
-
-        if (emailExists) {
-            throw {
-                statusCode: 400,
-                code: "EMAIL_TAKEN",
-                message: "A user with this email already exists.",
-            };
-        }
+    const doc = await UserModel.findById(id).exec();
+    if (!doc) {
+        throw { statusCode: 404, code: "NOT_FOUND", message: "User not found" };
     }
 
-    if (typeof body.name === "string") user.name = body.name;
-    if (typeof body.email === "string") user.email = body.email;
-    if (typeof body.role === "string") user.role = body.role;
-    if (typeof body.isActive === "boolean") user.isActive = body.isActive;
+    // Apply simple fields
+    if (body.name !== undefined) doc.name = body.name;
+    if (body.email !== undefined) doc.email = body.email;
+    if (body.role !== undefined) doc.role = body.role;
+    if (body.sex !== undefined) doc.sex = body.sex;
+    if (body.isActive !== undefined) doc.isActive = body.isActive;
 
-    if (body.sex !== undefined) user.sex = body.sex ?? null;
+    if (body.profilePicUrl !== undefined) doc.profilePicUrl = body.profilePicUrl;
 
-    if (body.heightCm !== undefined) user.heightCm = body.heightCm ?? null;
-    if (body.currentWeightKg !== undefined)
-        user.currentWeightKg = body.currentWeightKg ?? null;
+    if (body.heightCm !== undefined) doc.heightCm = body.heightCm;
+    if (body.currentWeightKg !== undefined) doc.currentWeightKg = body.currentWeightKg;
+    if (body.units !== undefined) doc.units = body.units;
 
-    if (body.units !== undefined) user.units = body.units ?? null;
+    if (body.birthDate !== undefined) doc.birthDate = body.birthDate;
+    if (body.activityGoal !== undefined) doc.activityGoal = body.activityGoal;
+    if (body.timezone !== undefined) doc.timezone = body.timezone;
 
-    if (body.birthDate !== undefined) user.birthDate = body.birthDate ?? null;
-    if (body.activityGoal !== undefined)
-        user.activityGoal = body.activityGoal ?? null;
-    if (body.timezone !== undefined) user.timezone = body.timezone ?? null;
+    /**
+     * Coaching updates
+     *
+     * Important:
+     * - If coachMode is being updated to NONE/TRAINER, we force assignedTrainer to null,
+     *   unless the request explicitly sets it to null (either way it's null).
+     * - If coachMode is being updated to TRAINEE, zod already enforces assignedTrainer presence,
+     *   but we still validate the trainer exists and is TRAINER.
+     */
+    if (body.coachMode !== undefined) {
+        doc.coachMode = body.coachMode;
 
-    await user.save();
+        if (body.coachMode === "TRAINEE") {
+            const assignedTrainerId = toObjectIdOrNull(body.assignedTrainer);
+            if (!assignedTrainerId) {
+                throw {
+                    statusCode: 400,
+                    code: "INVALID_COACHING_STATE",
+                    message:
+                        'assignedTrainer is required when setting coachMode to "TRAINEE"',
+                };
+            }
 
-    return res.json(user.toJSON());
+            await assertTrainerExists(assignedTrainerId);
+            doc.assignedTrainer = assignedTrainerId as any;
+        } else {
+            // NONE or TRAINER
+            doc.assignedTrainer = null as any;
+        }
+    } else if (body.assignedTrainer !== undefined) {
+        /**
+         * Optional: allow changing assignedTrainer without changing coachMode,
+         * but only when the user is already TRAINEE.
+         */
+        if (doc.coachMode !== "TRAINEE") {
+            throw {
+                statusCode: 400,
+                code: "INVALID_COACHING_STATE",
+                message:
+                    'assignedTrainer can only be set when user coachMode is "TRAINEE"',
+            };
+        }
+
+        const assignedTrainerId = toObjectIdOrNull(body.assignedTrainer);
+        if (!assignedTrainerId) {
+            throw {
+                statusCode: 400,
+                code: "INVALID_ASSIGNED_TRAINER",
+                message: "Invalid assignedTrainer",
+            };
+        }
+
+        await assertTrainerExists(assignedTrainerId);
+        doc.assignedTrainer = assignedTrainerId as any;
+    }
+
+    await doc.save();
+    return res.json(doc.toJSON());
 }
 
 /**
  * PATCH /api/admin/users/:id/password
- * Update user password (admin reset).
  */
 export async function updateUserPassword(req: Request, res: Response) {
-    const { id } = req.params;
-    const body = req.body as AdminUpdatePasswordInput;
+    const id = String(req.params.id);
+    const body = (req as any).validatedBody as AdminUpdatePasswordInput;
 
-    const user = await findUserOrThrow(id);
+    const doc = await UserModel.findById(id).exec();
+    if (!doc) {
+        throw { statusCode: 404, code: "NOT_FOUND", message: "User not found" };
+    }
 
-    const passwordHash = await bcrypt.hash(body.password, 10);
-    user.passwordHash = passwordHash;
+    doc.passwordHash = await bcrypt.hash(body.password, 10);
+    await doc.save();
 
-    await user.save();
-
-    return res.json({
-        id: user.id,
-        message: "Password updated successfully",
-    });
+    return res.json({ ok: true });
 }
 
 /**
  * DELETE /api/admin/users/:id
- * Soft delete by default: set isActive = false.
+ * Soft delete (isActive false)
  */
 export async function deleteUser(req: Request, res: Response) {
-    const { id } = req.params;
+    const id = String(req.params.id);
 
-    const user = await findUserOrThrow(id);
+    const doc = await UserModel.findById(id).exec();
+    if (!doc) {
+        throw { statusCode: 404, code: "NOT_FOUND", message: "User not found" };
+    }
 
-    // Soft delete: deactivate the user
-    user.isActive = false;
-    await user.save();
+    doc.isActive = false;
+    await doc.save();
 
-    return res.json({
-        id: user.id,
-        message: "User deactivated",
-    });
+    return res.json({ ok: true });
 }
 
 /**
  * DELETE /api/admin/users/:id/purge
- * Hard delete + cascade cleanup for user-owned data.
- *
- * Returns a cleanup report so FE can show what was removed.
+ * Hard delete + cascade (if you have cascade logic elsewhere)
  */
 export async function purgeUser(req: Request, res: Response) {
-    const { id } = req.params;
+    const id = String(req.params.id);
 
-    // Ensure user exists first (404 if missing)
-    const user = await findUserOrThrow(id);
-
-    // Safety rail: prevent purging yourself (requires verifyToken setting req.user)
-    const requesterId = (req as any)?.user?.id as string | undefined;
-    if (requesterId && requesterId === user.id) {
-        throw {
-            statusCode: 400,
-            code: "CANNOT_PURGE_SELF",
-            message: "No puedes purgar tu propio usuario.",
-        };
+    const doc = await UserModel.findById(id).exec();
+    if (!doc) {
+        throw { statusCode: 404, code: "NOT_FOUND", message: "User not found" };
     }
 
-    type CleanupItem = { model: string; deletedCount: number };
-    const cleanup: CleanupItem[] = [];
+    await UserModel.deleteOne({ _id: doc._id }).exec();
 
-    /**
-     * Helper: deleteMany using the first matching user reference field.
-     * This avoids losing functionality if different models use different fields.
-     */
-    async function deleteByUserRef(
-        modelName: string,
-        model: any,
-        userId: string,
-        candidateFields: string[]
-    ) {
-        // Find the first field that exists in the schema
-        const schemaPaths = model?.schema?.paths ? Object.keys(model.schema.paths) : [];
-        const field = candidateFields.find((f) => schemaPaths.includes(f));
-
-        if (!field) {
-            // Model doesn't have a known user ref field; do nothing safely.
-            cleanup.push({ model: modelName, deletedCount: 0 });
-            return;
-        }
-
-        const result = await model.deleteMany({ [field]: userId }).exec();
-        cleanup.push({
-            model: modelName,
-            deletedCount: typeof result?.deletedCount === "number" ? result.deletedCount : 0,
-        });
-    }
-
-    // These are the most common names; keep this list conservative and safe.
-    const userRefFields = ["userId", "user", "ownerId", "createdBy", "authorId"];
-
-    // 1) Tokens / settings / metrics
-    await deleteByUserRef("RefreshToken", RefreshTokenModel, user.id, userRefFields);
-    await deleteByUserRef("UserMetric", UserMetricModel, user.id, userRefFields);
-    await deleteByUserRef("UserSettings", UserSettingsModel, user.id, userRefFields);
-
-    // 2) Workout data
-    await deleteByUserRef("WorkoutDay", WorkoutDayModel, user.id, userRefFields);
-    await deleteByUserRef("WorkoutRoutineWeek", WorkoutRoutineWeekModel, user.id, userRefFields);
-
-    /**
-     * 3) AppSettings y Movement:
-     * - OJO: si AppSettings es GLOBAL (una sola config para toda la app), NO debe borrarse aquí.
-     * - Lo dejo en modo "seguro": solo borra si el esquema tiene un campo userRef conocido.
-     */
-    cleanup.push({ model: "AppSettings", deletedCount: 0 });
-
-    /**
-     * Movement:
-     * - Si Movement es catálogo global, no se borra (al no tener user ref no hará nada).
-     * - Si Movement es por usuario, se borrará con el campo correcto.
-     */
-    await deleteByUserRef("Movement", MovementModel, user.id, userRefFields);
-
-    // 4) Finally, delete user (hard delete)
-    const userDel = await UserModel.deleteOne({ _id: user._id }).exec();
-    cleanup.push({
-        model: "User",
-        deletedCount: typeof userDel?.deletedCount === "number" ? userDel.deletedCount : 0,
-    });
-
-    const totalDeleted = cleanup.reduce((sum, i) => sum + i.deletedCount, 0);
-
-    return res.json({
-        id: user.id,
-        message: "User purged successfully",
-        cleanup: {
-            items: cleanup,
-            totalDeleted,
-        },
-    });
+    return res.json({ ok: true });
 }

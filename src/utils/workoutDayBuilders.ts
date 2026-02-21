@@ -324,6 +324,8 @@ export const DEFAULT_FIELDS_ALL = [
     "notes",
     "tags",
     "meta",
+    "plannedRoutine",
+    "plannedMeta",
     "sleepSummary",
     "trainingSummary",
     "trainingTotals",
@@ -393,6 +395,13 @@ export const buildCalendarDay = (
             s.coreMinutes != null ||
             s.deepMinutes != null);
 
+    const pr = day?.plannedRoutine ?? null;
+    const hasPlanned =
+        !!pr &&
+        (typeof pr.sessionType === "string" && pr.sessionType.trim().length > 0 ||
+            typeof pr.focus === "string" && pr.focus.trim().length > 0 ||
+            (Array.isArray(pr.exercises) && pr.exercises.length > 0));
+
     const sleepSummary = opts.includeSummaries ? computeSleepSummary(day) : undefined;
     const trainingSummary = opts.includeSummaries ? computeTrainingSummary(day) : undefined;
 
@@ -405,6 +414,13 @@ export const buildCalendarDay = (
 
         hasSleep,
         hasTraining,
+
+        plannedRoutine: day.plannedRoutine ?? null,
+        plannedMeta: day.plannedMeta ?? null,
+
+        // Optional helper flag (CalendarDayFull allows extra fields via pickFields anyway)
+        // If you don't want this, remove it and nothing breaks.
+        ...(typeof (day as any)?.hasPlanned === "boolean" ? { hasPlanned: (day as any).hasPlanned } : { hasPlanned }),
 
         sleep: opts.includeSleep ? day.sleep ?? null : undefined,
         training: opts.includeTraining ? day.training ?? null : undefined,

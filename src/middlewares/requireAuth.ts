@@ -12,7 +12,11 @@ export const requireAuth = (req: Request, _res: Response, next: NextFunction) =>
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
     if (!token) {
-        return next({ status: 401, code: "UNAUTHORIZED", message: "Missing access token" });
+        return next({
+            statusCode: 401,
+            code: "UNAUTHORIZED",
+            message: "Missing access token",
+        });
     }
 
     try {
@@ -25,6 +29,10 @@ export const requireAuth = (req: Request, _res: Response, next: NextFunction) =>
 
         return next();
     } catch {
-        return next({ status: 401, code: "UNAUTHORIZED", message: "Invalid or expired access token" });
+        return next({
+            statusCode: 401,
+            code: "UNAUTHORIZED",
+            message: "Invalid or expired access token",
+        });
     }
 };

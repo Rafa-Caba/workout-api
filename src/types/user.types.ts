@@ -1,4 +1,4 @@
-import type { Sex, Units, UserRole } from "./auth.types";
+import type { Sex, Units, UserRole, CoachMode } from "./auth.types";
 import type { ISODate } from "./workoutDay.types";
 
 export type ActivityGoal =
@@ -23,6 +23,12 @@ export type UserProfileUpdateRequest = {
     birthDate?: ISODate | null;
     activityGoal?: ActivityGoal;
     timezone?: string | null;
+
+    /**
+     * Coaching (may be controlled by dedicated endpoints later)
+     */
+    coachMode?: CoachMode;
+    assignedTrainer?: string | null; // User id
 };
 
 export type AdminUserUpdateRequest = UserProfileUpdateRequest & {

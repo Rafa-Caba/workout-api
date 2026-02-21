@@ -98,6 +98,54 @@ export type TrainingBlock = {
     raw: unknown | null;
 };
 
+/**
+ * =========================================================
+ * Planned routine (trainer/template-owned)
+ * Mirrors RoutineDay structure (WorkoutRoutineWeek)
+ * =========================================================
+ */
+
+export type PlannedRoutineSource = "trainer" | "template";
+
+export type PlannedRoutineExercise = {
+    id: string;
+
+    name: string;
+
+    movementId: string | null;
+    movementName: string | null;
+
+    sets: number | null;
+    reps: string | null;
+    rpe: number | null;
+
+    load: string | null;
+    notes: string | null;
+
+    attachmentPublicIds: string[] | null;
+};
+
+export type PlannedRoutine = {
+    sessionType: string | null;
+    focus: string | null;
+    exercises: PlannedRoutineExercise[] | null;
+
+    notes: string | null;
+    tags: string[] | null;
+};
+
+export type PlannedMeta = {
+    plannedBy: string; // User id
+    plannedAt: string; // ISO datetime
+    source: PlannedRoutineSource | null;
+};
+
+/**
+ * =========================================================
+ * Core WorkoutDay doc
+ * =========================================================
+ */
+
 export type WorkoutDayDoc = {
     id: string;
     userId: string;
@@ -106,7 +154,13 @@ export type WorkoutDayDoc = {
     weekKey: WeekKey;
 
     sleep: SleepBlock | null;
+
+    // actual training (trainee-owned)
     training: TrainingBlock | null;
+
+    // planned routine (trainer/template-owned)
+    plannedRoutine: PlannedRoutine | null;
+    plannedMeta: PlannedMeta | null;
 
     notes: string | null;
     tags: string[] | null;
@@ -181,9 +235,16 @@ export type CalendarDayFull = {
 
     hasSleep?: boolean;
     hasTraining?: boolean;
+    hasPlanned?: boolean;
 
     sleep?: SleepBlock | null;
+
+    // actual training
     training?: TrainingBlock | null;
+
+    // planned routine (optional in views)
+    plannedRoutine?: PlannedRoutine | null;
+    plannedMeta?: PlannedMeta | null;
 
     notes?: string | null;
     tags?: string[] | null;

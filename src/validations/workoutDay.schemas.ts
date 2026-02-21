@@ -142,7 +142,13 @@ export const attachSessionMediaBodySchema = z
 const sleepSchema = z
     .object({
         timeAsleepMinutes: nonNegIntFromQuery.nullable().optional(),
-        score: nonNegIntFromQuery.refine((n) => n <= 100, "Expected <= 100").nullable().optional(),
+
+        timeInBedMinutes: nonNegIntFromQuery.nullable().optional(),
+
+        score: nonNegIntFromQuery
+            .refine((n) => n <= 100, "Expected <= 100")
+            .nullable()
+            .optional(),
 
         awakeMinutes: nonNegIntFromQuery.nullable().optional(),
         remMinutes: nonNegIntFromQuery.nullable().optional(),
