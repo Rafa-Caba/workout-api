@@ -13,8 +13,20 @@ export type UpdateMePayload = {
     units?: { weight: "kg" | "lb"; distance: "km" | "mi" } | null;
 
     birthDate?: string | null; // YYYY-MM-DD
-    activityGoal?: "fat_loss" | "hypertrophy" | "strength" | "maintenance" | "other" | null;
+    activityGoal?:
+    | "fat_loss"
+    | "hypertrophy"
+    | "strength"
+    | "maintenance"
+    | "other"
+    | null;
     timezone?: string | null;
+
+    /**
+     * Baseline training profile (user-owned)
+     */
+    trainingLevel?: "BEGINNER" | "INTERMEDIATE" | "ADVANCED" | null;
+    healthNotes?: string | null;
 };
 
 export const getUserById = async (userId: string): Promise<PublicUser> => {
@@ -32,7 +44,10 @@ export const getUserById = async (userId: string): Promise<PublicUser> => {
     return toPublicUser(json);
 };
 
-export const updateMe = async (userId: string, payload: UpdateMePayload): Promise<PublicUser> => {
+export const updateMe = async (
+    userId: string,
+    payload: UpdateMePayload
+): Promise<PublicUser> => {
     const user = await UserModel.findById(userId);
 
     if (!user) {
@@ -48,13 +63,21 @@ export const updateMe = async (userId: string, payload: UpdateMePayload): Promis
     if (payload.sex !== undefined) user.sex = payload.sex as any;
 
     if (payload.heightCm !== undefined) user.heightCm = payload.heightCm;
-    if (payload.currentWeightKg !== undefined) user.currentWeightKg = payload.currentWeightKg;
+    if (payload.currentWeightKg !== undefined)
+        user.currentWeightKg = payload.currentWeightKg;
 
     if (payload.units !== undefined) user.units = payload.units as any;
 
     if (payload.birthDate !== undefined) user.birthDate = payload.birthDate;
-    if (payload.activityGoal !== undefined) user.activityGoal = payload.activityGoal as any;
+    if (payload.activityGoal !== undefined)
+        user.activityGoal = payload.activityGoal as any;
     if (payload.timezone !== undefined) user.timezone = payload.timezone;
+
+    // New fields
+    if (payload.trainingLevel !== undefined)
+        (user as any).trainingLevel = payload.trainingLevel;
+    if (payload.healthNotes !== undefined)
+        (user as any).healthNotes = payload.healthNotes;
 
     await user.save();
 
@@ -90,7 +113,9 @@ export const setMyProfilePic = async (
     return toPublicUser(user.toJSON());
 };
 
-export const removeMyProfilePic = async (userId: string): Promise<PublicUser> => {
+export const removeMyProfilePic = async (
+    userId: string
+): Promise<PublicUser> => {
     const user = await UserModel.findById(userId);
 
     if (!user) {

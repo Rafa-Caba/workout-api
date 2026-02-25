@@ -66,3 +66,19 @@ export const weeklyAssignBodySchema = z.object({
      */
     plannedAt: z.string().optional(),
 });
+
+/**
+ * Coach ↔ Trainee Profile
+ * GET/PUT /api/trainer/trainees/:id/profile
+ */
+export const coachProfileParamsSchema = z.object({
+    id: z.string().min(1),
+});
+
+export const upsertCoachProfileBodySchema = z.object({
+    coachAssessedLevel: z
+        .enum(["BEGINNER", "INTERMEDIATE", "ADVANCED"])
+        .nullable()
+        .optional(),
+    coachNotes: z.string().max(8000).nullable().optional(),
+});

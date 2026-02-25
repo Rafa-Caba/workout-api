@@ -1,7 +1,6 @@
-import type { PublicUser } from "../types/auth.types";
+import type { PublicUser, TrainingLevel } from "../types/auth.types";
 
 // Minimal shape we need from the Mongoose doc JSON
-// Note: assignedTrainer can be ObjectId-like in JSON, so we normalize to string | null.
 type UserJSON = {
     id: string;
     name: string;
@@ -19,6 +18,12 @@ type UserJSON = {
     birthDate?: string | null;
     activityGoal?: PublicUser["activityGoal"];
     timezone?: string | null;
+
+    /**
+     * Baseline training profile (user-owned)
+     */
+    trainingLevel?: TrainingLevel;
+    healthNotes?: string | null;
 
     lastLoginAt?: Date | string | null;
 
@@ -45,26 +50,27 @@ const toIsoString = (value: Date | string | undefined): string => {
 function toIdStringOrNull(v: unknown): string | null {
     if (v == null) return null;
 
-    // String id
     if (typeof v === "string") {
         const s = v.trim();
         return s.length ? s : null;
     }
 
-    // ObjectId-like: { toString(): string }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const anyV: any = v as any;
     if (typeof anyV?.toString === "function") {
         const s = String(anyV.toString()).trim();
-        // Mongoose ObjectId toString() returns a hex string; still treat as string.
         return s.length ? s : null;
     }
 
     return null;
 }
 
+const normalizeTrainingLevel = (v: unknown): TrainingLevel => {
+    if (v === "BEGINNER" || v === "INTERMEDIATE" || v === "ADVANCED") return v;
+    return null;
+};
+
 export const toPublicUser = (u: UserJSON): PublicUser => {
-    // Normalize trainer fields safely
     const coachMode: PublicUser["coachMode"] = u.coachMode ?? "NONE";
     const assignedTrainer = toIdStringOrNull(u.assignedTrainer);
 
@@ -76,7 +82,6 @@ export const toPublicUser = (u: UserJSON): PublicUser => {
         sex: u.sex ?? null,
         role: u.role,
 
-        isActive: true, // If PublicUser includes isActive, remove this line if it's not part of the type.
         profilePicUrl: u.profilePicUrl ?? null,
 
         heightCm: u.heightCm ?? null,
@@ -87,6 +92,9 @@ export const toPublicUser = (u: UserJSON): PublicUser => {
         activityGoal: u.activityGoal ?? null,
         timezone: u.timezone ?? null,
 
+        trainingLevel: normalizeTrainingLevel(u.trainingLevel),
+        healthNotes: u.healthNotes ?? null,
+
         lastLoginAt: toIsoStringOrNull(u.lastLoginAt),
 
         coachMode,
@@ -94,5 +102,5 @@ export const toPublicUser = (u: UserJSON): PublicUser => {
 
         createdAt: toIsoString(u.createdAt),
         updatedAt: toIsoString(u.updatedAt),
-    } as PublicUser;
+    };
 };

@@ -4,6 +4,7 @@ import { WorkoutDayModel } from "../models/WorkoutDay.model";
 import { WorkoutRoutineWeekModel } from "../models/WorkoutRoutineWeek.model";
 import type { BuildOpts } from "../types/workoutDay.types";
 import { getWeekViewByKey } from "./workoutDay.service";
+import { CoachTraineeProfileModel } from "../models/CoachTraineeProfile.model";
 
 type Role = "admin" | "user";
 type DayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
@@ -69,7 +70,8 @@ function isoDateToWeekKey(dateStr: string): string {
 }
 
 function isEmptyPlannedDay(day: any): boolean {
-    const sessionType = typeof day?.sessionType === "string" ? day.sessionType.trim() : "";
+    const sessionType =
+        typeof day?.sessionType === "string" ? day.sessionType.trim() : "";
     const focus = typeof day?.focus === "string" ? day.focus.trim() : "";
     const notes = typeof day?.notes === "string" ? day.notes.trim() : "";
     const tags = Array.isArray(day?.tags) ? day.tags.filter(Boolean) : [];
@@ -93,7 +95,9 @@ function mapRoutineDayToPlannedRoutine(day: any) {
 
 export async function listTrainees(trainerId: string, role: Role) {
     if (role === "admin") {
-        const docs = await UserModel.find({ coachMode: "TRAINEE" }).sort({ createdAt: -1 }).exec();
+        const docs = await UserModel.find({ coachMode: "TRAINEE" })
+            .sort({ createdAt: -1 })
+            .exec();
         return docs.map((d) => d.toJSON());
     }
 
@@ -112,8 +116,16 @@ export async function getTraineeDayByDate(traineeId: string, date: string) {
     return { day: doc ? doc.toJSON() : null };
 }
 
-export async function getTraineeWeekViewByKey(traineeId: string, weekKey: string, q: any) {
-    const fields = Array.isArray(q.fields) ? q.fields : q.fields ? String(q.fields).split(",") : null;
+export async function getTraineeWeekViewByKey(
+    traineeId: string,
+    weekKey: string,
+    q: any
+) {
+    const fields = Array.isArray(q.fields)
+        ? q.fields
+        : q.fields
+            ? String(q.fields).split(",")
+            : null;
 
     const opts: Omit<BuildOpts, "fields"> = {
         fillMissingDays: q.fillMissingDays === "true" || q.fillMissingDays === true,
@@ -132,7 +144,11 @@ export async function getTraineeWeekViewByKey(traineeId: string, weekKey: string
     return await getWeekViewByKey(traineeId, weekKey, fields, opts);
 }
 
-export async function getTraineeRecovery(traineeId: string, from: string, to: string) {
+export async function getTraineeRecovery(
+    traineeId: string,
+    from: string,
+    to: string
+) {
     const docs = await WorkoutDayModel.find({
         userId: new mongoose.Types.ObjectId(traineeId),
         date: { $gte: from, $lte: to },
@@ -167,7 +183,11 @@ export async function patchTraineePlannedRoutine(args: {
 
     const trainee = await UserModel.findById(traineeId).select("_id").lean().exec();
     if (!trainee) {
-        throw { statusCode: 404, code: "TRAINEE_NOT_FOUND", message: "Trainee not found" };
+        throw {
+            statusCode: 404,
+            code: "TRAINEE_NOT_FOUND",
+            message: "Trainee not found",
+        };
     }
 
     const existing = await WorkoutDayModel.findOne({ userId: traineeId, date }).exec();
@@ -177,7 +197,8 @@ export async function patchTraineePlannedRoutine(args: {
             throw {
                 statusCode: 409,
                 code: "PLANNED_LOCKED_BY_TRAINING",
-                message: "Cannot modify planned routine because actual training exists for this day.",
+                message:
+                    "Cannot modify planned routine because actual training exists for this day.",
             };
         }
 
@@ -226,15 +247,6 @@ export async function patchTraineePlannedRoutine(args: {
 
 /**
  * Weekly Assign (MVP)
- * - ALWAYS processes 7 days (Mon..Sun) for the target weekKey.
- * - Source: trainer's own WorkoutRoutineWeek (template)
- * - Target: trainee's WorkoutDay.plannedRoutine for each day in the week
- * - Lock: if training exists -> do not modify plannedRoutine/meta
- * - Report counts
- *
- * NOTE:
- * We key the template by dayKey (Mon..Sun), not by date, to be robust
- * against older/partial templates that might miss date fields.
  */
 export async function assignWeekToTrainee(args: {
     trainerId: string;
@@ -380,4 +392,60 @@ export async function assignWeekToTrainee(args: {
     }
 
     return { report };
+}
+
+/**
+ * =========================================================
+ * Coach ↔ Trainee Profile (coach-owned)
+ * =========================================================
+ */
+
+export async function getTraineeCoachProfile(args: {
+    trainerId: string;
+    trainerRole: Role;
+    traineeId: string;
+}) {
+    const { trainerId, traineeId } = args;
+
+    const doc = await CoachTraineeProfileModel.findOne({
+        traineeId: new mongoose.Types.ObjectId(traineeId),
+        trainerId: new mongoose.Types.ObjectId(trainerId),
+    }).exec();
+
+    return { profile: doc ? doc.toJSON() : null };
+}
+
+export async function upsertTraineeCoachProfile(args: {
+    trainerId: string;
+    trainerRole: Role;
+    traineeId: string;
+    coachAssessedLevel?: "BEGINNER" | "INTERMEDIATE" | "ADVANCED" | null;
+    coachNotes?: string | null;
+}) {
+    const { trainerId, traineeId, coachAssessedLevel, coachNotes } = args;
+
+    // Ensure trainee exists (clean error)
+    const trainee = await UserModel.findById(traineeId).select("_id").lean().exec();
+    if (!trainee) {
+        throw {
+            statusCode: 404,
+            code: "TRAINEE_NOT_FOUND",
+            message: "Trainee not found",
+        };
+    }
+
+    const update: Record<string, unknown> = {};
+    if (coachAssessedLevel !== undefined) update.coachAssessedLevel = coachAssessedLevel;
+    if (coachNotes !== undefined) update.coachNotes = coachNotes;
+
+    const doc = await CoachTraineeProfileModel.findOneAndUpdate(
+        {
+            traineeId: new mongoose.Types.ObjectId(traineeId),
+            trainerId: new mongoose.Types.ObjectId(trainerId),
+        },
+        { $set: update },
+        { new: true, upsert: true }
+    ).exec();
+
+    return { profile: doc.toJSON() };
 }

@@ -28,4 +28,14 @@ export const updateMeSchema = z.object({
         .optional(),
 
     timezone: z.string().max(120).nullable().optional(),
+
+    /**
+     * Baseline training profile (user-owned)
+     */
+    trainingLevel: z
+        .enum(["BEGINNER", "INTERMEDIATE", "ADVANCED"])
+        .nullable()
+        .optional(),
+
+    healthNotes: z.string().max(5000).nullable().optional(),
 });

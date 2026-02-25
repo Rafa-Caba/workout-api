@@ -15,6 +15,8 @@ import {
     patchPlannedRoutineBodySchema,
     weeklyAssignParamsSchema,
     weeklyAssignBodySchema,
+    coachProfileParamsSchema,
+    upsertCoachProfileBodySchema,
 } from "../validations/trainer.schemas";
 
 const router = Router();
@@ -70,6 +72,26 @@ router.post(
     validate("body", weeklyAssignBodySchema),
     requireTrainerAccessToTrainee,
     trainerController.assignWeekToTrainee
+);
+
+/**
+ * Coach ↔ Trainee Profile (coach-owned)
+ * GET /api/trainer/trainees/:id/profile
+ * PUT /api/trainer/trainees/:id/profile
+ */
+router.get(
+    "/trainees/:id/profile",
+    validate("params", coachProfileParamsSchema),
+    requireTrainerAccessToTrainee,
+    trainerController.getTraineeCoachProfile
+);
+
+router.put(
+    "/trainees/:id/profile",
+    validate("params", coachProfileParamsSchema),
+    validate("body", upsertCoachProfileBodySchema),
+    requireTrainerAccessToTrainee,
+    trainerController.upsertTraineeCoachProfile
 );
 
 export default router;

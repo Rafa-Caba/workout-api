@@ -9,6 +9,8 @@ export type ActivityGoal =
     | "other"
     | null;
 
+export type TrainingLevel = "BEGINNER" | "INTERMEDIATE" | "ADVANCED" | null;
+
 export type UserProfileUpdateRequest = {
     name?: string;
     sex?: Sex;
@@ -24,6 +26,10 @@ export type UserProfileUpdateRequest = {
     activityGoal?: ActivityGoal;
     timezone?: string | null;
 
+    // Baseline training profile (user-owned)
+    trainingLevel?: TrainingLevel;
+    healthNotes?: string | null;
+
     /**
      * Coaching (may be controlled by dedicated endpoints later)
      */
@@ -34,6 +40,29 @@ export type UserProfileUpdateRequest = {
 export type AdminUserUpdateRequest = UserProfileUpdateRequest & {
     email?: string;
     role?: UserRole;
+};
+
+// =======================
+// Coach ↔ Trainee Profile (Coach-owned)
+// =======================
+
+export type CoachTraineeProfile = {
+    id: string;
+    traineeId: string;
+    trainerId: string;
+
+    coachAssessedLevel: TrainingLevel;
+    coachNotes: string | null;
+
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export type UpsertCoachTraineeProfileRequest = {
+    traineeId: string;
+
+    coachAssessedLevel?: TrainingLevel;
+    coachNotes?: string | null;
 };
 
 // =======================

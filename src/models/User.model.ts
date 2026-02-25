@@ -14,6 +14,8 @@ const UnitsSchema = new Schema(
     { _id: false }
 );
 
+const TrainingLevelEnum = ["BEGINNER", "INTERMEDIATE", "ADVANCED"] as const;
+
 const UserSchema = new Schema(
     {
         name: { type: String, required: true, trim: true, maxlength: 120 },
@@ -62,6 +64,17 @@ const UserSchema = new Schema(
         },
         timezone: { type: String, default: null },
 
+        // Baseline training profile (user-owned)
+        trainingLevel: {
+            type: String,
+            enum: TrainingLevelEnum,
+            default: null,
+            index: true,
+        },
+
+        // Health / injuries / limitations (user-owned)
+        healthNotes: { type: String, default: null, maxlength: 5000 },
+
         lastLoginAt: { type: Date, default: null },
 
         /**
@@ -93,9 +106,8 @@ const UserSchema = new Schema(
             type: Schema.Types.ObjectId,
             ref: "User",
             default: null,
-            index: true, // fast trainee lookup by trainer
+            index: true,
             validate: {
-                // Mirror validation for clearer field-level errors.
                 validator: function (this: any, v: unknown) {
                     const coachMode: "NONE" | "TRAINER" | "TRAINEE" =
                         this.coachMode ?? "NONE";
@@ -116,17 +128,13 @@ const UserSchema = new Schema(
     }
 );
 
-// Base de campos del schema
 type UserBase = InferSchemaType<typeof UserSchema>;
 
-// Documento hidratado de Mongoose, con `id` y `toJSON`
 export type UserDocument = HydratedDocument<UserBase> & {
     id: string;
 };
 
-// Tipo JSON público (lo que sale de `toJSON`)
 export type UserJSON = ReturnType<UserDocument["toJSON"]>;
 
-// Modelo
 export const UserModel: Model<UserDocument> =
     mongoose.models.User || mongoose.model<UserDocument>("User", UserSchema);

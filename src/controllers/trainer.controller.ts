@@ -15,7 +15,10 @@ export const getTraineeDay = async (req: Request, res: Response) => {
     const traineeId = String(req.params.id);
     const q: any = (req as any).validatedQuery ?? req.query;
 
-    const out = await trainerService.getTraineeDayByDate(traineeId, String(q.date));
+    const out = await trainerService.getTraineeDayByDate(
+        traineeId,
+        String(q.date)
+    );
     return res.status(200).json(out);
 };
 
@@ -23,9 +26,11 @@ export const getTraineeWeekSummary = async (req: Request, res: Response) => {
     const traineeId = String(req.params.id);
     const q: any = (req as any).validatedQuery ?? req.query;
 
-    const out = await trainerService.getTraineeWeekViewByKey(traineeId, String(q.weekKey), q);
-
-    // console.log({ out: out.days });
+    const out = await trainerService.getTraineeWeekViewByKey(
+        traineeId,
+        String(q.weekKey),
+        q
+    );
 
     return res.status(200).json(out);
 };
@@ -34,7 +39,11 @@ export const getTraineeRecovery = async (req: Request, res: Response) => {
     const traineeId = String(req.params.id);
     const q: any = (req as any).validatedQuery ?? req.query;
 
-    const out = await trainerService.getTraineeRecovery(traineeId, String(q.from), String(q.to));
+    const out = await trainerService.getTraineeRecovery(
+        traineeId,
+        String(q.from),
+        String(q.to)
+    );
     return res.status(200).json(out);
 };
 
@@ -73,8 +82,46 @@ export const assignWeekToTrainee = async (req: Request, res: Response) => {
         trainerRole: trainer.role,
         traineeId,
         weekKey,
-        clearEmptyDays: body.clearEmptyDays !== undefined ? Boolean(body.clearEmptyDays) : true,
+        clearEmptyDays:
+            body.clearEmptyDays !== undefined ? Boolean(body.clearEmptyDays) : true,
         plannedAt: typeof body.plannedAt === "string" ? body.plannedAt : null,
+    });
+
+    return res.status(200).json(out);
+};
+
+/**
+ * GET /api/trainer/trainees/:id/profile
+ */
+export const getTraineeCoachProfile = async (req: Request, res: Response) => {
+    const trainer = getAuthUser(req);
+    const traineeId = String(req.params.id);
+
+    const out = await trainerService.getTraineeCoachProfile({
+        trainerId: trainer.id,
+        trainerRole: trainer.role,
+        traineeId,
+    });
+
+    return res.status(200).json(out);
+};
+
+/**
+ * PUT /api/trainer/trainees/:id/profile
+ */
+export const upsertTraineeCoachProfile = async (req: Request, res: Response) => {
+    const trainer = getAuthUser(req);
+    const traineeId = String(req.params.id);
+
+    const body: any = (req as any).validatedBody ?? req.body;
+
+    const out = await trainerService.upsertTraineeCoachProfile({
+        trainerId: trainer.id,
+        trainerRole: trainer.role,
+        traineeId,
+        coachAssessedLevel:
+            body.coachAssessedLevel !== undefined ? body.coachAssessedLevel : undefined,
+        coachNotes: body.coachNotes !== undefined ? body.coachNotes : undefined,
     });
 
     return res.status(200).json(out);
