@@ -145,9 +145,17 @@ export const patchWeekRoutineGymCheckDay = async (req: Request, res: Response) =
     const weekKey = String(req.params.weekKey);
     const dayKey = String(req.params.dayKey) as any;
 
+    console.log({
+        userId,
+        weekKey,
+        dayKey,
+    });
+
     const payload = req.body as any;
 
     const out = await patchGymCheckDay(userId, weekKey, dayKey, payload);
+
+    console.log({ out2: out });
 
     if (!out) {
         return res.status(404).json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });

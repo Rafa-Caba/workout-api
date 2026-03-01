@@ -11,12 +11,18 @@ export const createSession = async (req: Request, res: Response) => {
     const userId = getUserIdFromReq(req);
     const date = String(req.params.date);
 
+    console.log({ reqBody: req.body });
+
     const q: any = (req as any).validatedQuery ?? req.query;
     const returnMode: "day" | "session" = q?.returnMode === "session" ? "session" : "day";
 
     const payload = (req as any).validatedBody ?? req.body;
 
+    console.log({ payload });
+
     const out = await createTrainingSession(userId, date, payload, returnMode);
+
+    console.log({ outcreateSession: out });
 
     if ((out as any)?.error) {
         const err = (out as any).error;

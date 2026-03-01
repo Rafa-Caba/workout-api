@@ -15,16 +15,18 @@ export const getPublicAppSettings = asyncHandler(
         if (!doc) {
             return res.json({
                 appName: "Workout Tracker",
+                appSubtitle: "Seguimiento de entrenamiento y sueño",
                 logoUrl: null,
                 themeDefaults: { mode: "system", palette: "blue" },
                 debug: { showJson: false },
             });
         }
 
-        const json = doc.toJSON() as any;
+        const json = doc.toJSON();
 
         return res.json({
             appName: json.appName,
+            appSubtitle: json.appSubtitle,
             logoUrl: json.appLogoUrl ?? null,
             themeDefaults: {
                 mode: json.themeDefaults?.mode ?? "system",

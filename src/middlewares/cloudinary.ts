@@ -22,7 +22,7 @@ export const uploadUserProfilePic = multer({
         cloudinary,
         params: {
             folder: "workout/users/profile-pictures",
-            allowed_formats: ["jpg", "jpeg", "png", "webp"],
+            allowed_formats: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
             public_id: (req: Request, file: Express.Multer.File) => {
                 const userId = (req as any).user?.id ?? "unknown";
                 const baseName = safeSlug(file.originalname);
@@ -43,7 +43,7 @@ export const uploadTrainingMedia = multer({
         cloudinary,
         params: {
             folder: "workout/training/sessions",
-            allowed_formats: ["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v"],
+            allowed_formats: ["jpg", "jpeg", "png", "webp", "heic", "heif", "mp4", "mov", "m4v"],
             resource_type: "auto",
             public_id: (req: Request, file: Express.Multer.File) => {
                 const userId = (req as any).user?.id ?? "unknown";
@@ -64,7 +64,7 @@ export const uploadMovementMedia = multer({
         cloudinary,
         params: {
             folder: "workout/movements",
-            allowed_formats: ["jpg", "jpeg", "png", "webp", "mp4", "mov", "m4v"],
+            allowed_formats: ["jpg", "jpeg", "png", "webp", "heic", "heif", "mp4", "mov", "m4v"],
             resource_type: "auto",
             public_id: (req: Request, file: Express.Multer.File) => {
                 const userId = (req as any).user?.id ?? "unknown";
@@ -85,7 +85,7 @@ export const uploadAppLogo = multer({
         cloudinary,
         params: {
             folder: "workout/app/logo",
-            allowed_formats: ["jpg", "jpeg", "png", "webp"],
+            allowed_formats: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
             public_id: (_req: Request, file: Express.Multer.File) => {
                 const baseName = safeSlug(file.originalname);
                 return `app_logo_${baseName}_${Date.now()}`;
