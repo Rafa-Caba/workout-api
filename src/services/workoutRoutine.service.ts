@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import { WorkoutRoutineWeekModel } from "../models/WorkoutRoutineWeek.model";
 import { assertMovementsExist } from "./movement.service";
 import { MovementModel } from "../models/Movement.model";
-import { GymCheckDayPatch, GymCheckExercisePatch, GymCheckMetricsPatch } from "../types/gymCheck.types"
+import { GymCheckDayPatch, GymCheckExercisePatch, GymCheckExerciseSet, GymCheckMetricsPatch } from "../types/gymCheck.types"
 
 type DayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
 const DAY_KEYS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -521,7 +521,51 @@ export async function deleteRoutineAttachment(
 // Gym Check (sync checklist + day metrics) - persisted in RoutineWeek.meta.gymCheck
 // =========================================================
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
+type PlainObject = Record<string, unknown>;
+
+type StoredGymCheckExercise = {
+    done?: boolean | null;
+    notes?: string | null;
+    durationMin?: number | null;
+    mediaPublicIds?: string[] | null;
+    performedSets?: GymCheckExerciseSet[] | null;
+    updatedAt?: string | null;
+};
+
+type StoredGymCheckMetrics = {
+    startAt?: string | null;
+    endAt?: string | null;
+
+    activeKcal?: number | null;
+    totalKcal?: number | null;
+
+    avgHr?: number | null;
+    maxHr?: number | null;
+
+    distanceKm?: number | null;
+    steps?: number | null;
+    elevationGainM?: number | null;
+
+    paceSecPerKm?: number | null;
+    cadenceRpm?: number | null;
+
+    effortRpe?: number | null;
+
+    trainingSource?: string | null;
+    dayEffortRpe?: number | null;
+};
+
+type StoredGymCheckDay = {
+    durationMin?: number | null;
+    notes?: string | null;
+    metrics?: StoredGymCheckMetrics | null;
+    exercises?: Record<string, StoredGymCheckExercise> | null;
+    updatedAt?: string | null;
+};
+
+type StoredGymCheckMap = Partial<Record<DayKey, StoredGymCheckDay>>;
+
+function isPlainObject(v: unknown): v is PlainObject {
     return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -535,20 +579,138 @@ function cleanNumberOrNull(v: unknown): number | null {
     return Number.isFinite(v) ? v : null;
 }
 
+function cleanBooleanOrNull(v: unknown): boolean | null | undefined {
+    if (typeof v === "boolean") return v;
+    if (v === null) return null;
+    return undefined;
+}
+
 function cleanStringArrayOrNull(v: unknown): string[] | null {
     if (v === null) return null;
     if (!Array.isArray(v)) return null;
+
     const out = v.map((x) => String(x).trim()).filter(Boolean);
     return out.length ? out : null;
 }
 
-function mergeGymCheckExercise(prev: Record<string, unknown> | null, patch: GymCheckExercisePatch): Record<string, unknown> {
-    const base: Record<string, unknown> = { ...(prev ?? {}) };
+function normalizeGymCheckExerciseSet(
+    value: unknown,
+    fallbackIndex: number
+): GymCheckExerciseSet | null {
+    if (!isPlainObject(value)) return null;
+
+    const setIndexRaw = value.setIndex;
+    const repsRaw = value.reps;
+    const weightRaw = value.weight;
+    const unitRaw = value.unit;
+    const rpeRaw = value.rpe;
+    const isWarmupRaw = value.isWarmup;
+    const isDropSetRaw = value.isDropSet;
+    const tempoRaw = value.tempo;
+    const restSecRaw = value.restSec;
+    const tagsRaw = value.tags;
+    const metaRaw = value.meta;
+
+    const setIndex =
+        typeof setIndexRaw === "number" && Number.isFinite(setIndexRaw) && setIndexRaw > 0
+            ? Math.trunc(setIndexRaw)
+            : fallbackIndex;
+
+    const reps =
+        repsRaw === null
+            ? null
+            : typeof repsRaw === "number" && Number.isFinite(repsRaw)
+                ? Math.trunc(repsRaw)
+                : null;
+
+    const weight =
+        weightRaw === null
+            ? null
+            : typeof weightRaw === "number" && Number.isFinite(weightRaw)
+                ? weightRaw
+                : null;
+
+    const unit: "lb" | "kg" = unitRaw === "kg" ? "kg" : "lb";
+
+    const rpe =
+        rpeRaw === null
+            ? null
+            : typeof rpeRaw === "number" && Number.isFinite(rpeRaw)
+                ? rpeRaw
+                : null;
+
+    const isWarmup = isWarmupRaw === true;
+    const isDropSet = isDropSetRaw === true;
+
+    const tempo =
+        tempoRaw === null
+            ? null
+            : cleanStringOrNull(tempoRaw);
+
+    const restSec =
+        restSecRaw === null
+            ? null
+            : typeof restSecRaw === "number" && Number.isFinite(restSecRaw)
+                ? Math.trunc(restSecRaw)
+                : null;
+
+    const tags =
+        tagsRaw === null
+            ? null
+            : cleanStringArrayOrNull(tagsRaw);
+
+    const meta =
+        metaRaw === null
+            ? null
+            : isPlainObject(metaRaw)
+                ? metaRaw
+                : null;
+
+    return {
+        setIndex,
+        reps,
+        weight,
+        unit,
+        rpe,
+        isWarmup,
+        isDropSet,
+        tempo,
+        restSec,
+        tags,
+        meta,
+    };
+}
+
+function normalizeGymCheckExerciseSets(input: unknown): GymCheckExerciseSet[] | null {
+    if (input === null) return null;
+    if (!Array.isArray(input)) return null;
+
+    const normalized: GymCheckExerciseSet[] = [];
+
+    input.forEach((item, index) => {
+        const parsed = normalizeGymCheckExerciseSet(item, index + 1);
+        if (parsed) {
+            normalized.push({
+                ...parsed,
+                setIndex: normalized.length + 1,
+            });
+        }
+    });
+
+    return normalized.length > 0 ? normalized : null;
+}
+
+function mergeGymCheckExercise(
+    prev: StoredGymCheckExercise | null,
+    patch: GymCheckExercisePatch
+): StoredGymCheckExercise {
+    const base: StoredGymCheckExercise = { ...(prev ?? {}) };
 
     if ("done" in patch) base.done = patch.done ?? null;
     if ("notes" in patch) base.notes = patch.notes ?? null;
     if ("durationMin" in patch) base.durationMin = patch.durationMin ?? null;
     if ("mediaPublicIds" in patch) base.mediaPublicIds = patch.mediaPublicIds ?? null;
+    if ("performedSets" in patch) base.performedSets = patch.performedSets ?? null;
 
     return base;
 }
@@ -558,26 +720,54 @@ function normalizeGymCheckMetricsPatch(payload: unknown): GymCheckMetricsPatch {
 
     const out: GymCheckMetricsPatch = {};
 
-    if ("startAt" in payload) out.startAt = cleanIsoOrNull((payload as any).startAt);
-    if ("endAt" in payload) out.endAt = cleanIsoOrNull((payload as any).endAt);
+    if ("startAt" in payload) out.startAt = cleanIsoOrNull(payload.startAt);
+    if ("endAt" in payload) out.endAt = cleanIsoOrNull(payload.endAt);
 
-    if ("activeKcal" in payload) out.activeKcal = cleanNumberOrNull((payload as any).activeKcal);
-    if ("totalKcal" in payload) out.totalKcal = cleanNumberOrNull((payload as any).totalKcal);
+    if ("activeKcal" in payload) out.activeKcal = cleanNumberOrNull(payload.activeKcal);
+    if ("totalKcal" in payload) out.totalKcal = cleanNumberOrNull(payload.totalKcal);
 
-    if ("avgHr" in payload) out.avgHr = cleanNumberOrNull((payload as any).avgHr);
-    if ("maxHr" in payload) out.maxHr = cleanNumberOrNull((payload as any).maxHr);
+    if ("avgHr" in payload) out.avgHr = cleanNumberOrNull(payload.avgHr);
+    if ("maxHr" in payload) out.maxHr = cleanNumberOrNull(payload.maxHr);
 
-    if ("distanceKm" in payload) out.distanceKm = cleanNumberOrNull((payload as any).distanceKm);
-    if ("steps" in payload) out.steps = cleanNumberOrNull((payload as any).steps);
-    if ("elevationGainM" in payload) out.elevationGainM = cleanNumberOrNull((payload as any).elevationGainM);
+    if ("distanceKm" in payload) out.distanceKm = cleanNumberOrNull(payload.distanceKm);
+    if ("steps" in payload) out.steps = cleanNumberOrNull(payload.steps);
+    if ("elevationGainM" in payload) out.elevationGainM = cleanNumberOrNull(payload.elevationGainM);
 
-    if ("paceSecPerKm" in payload) out.paceSecPerKm = cleanNumberOrNull((payload as any).paceSecPerKm);
-    if ("cadenceRpm" in payload) out.cadenceRpm = cleanNumberOrNull((payload as any).cadenceRpm);
+    if ("paceSecPerKm" in payload) out.paceSecPerKm = cleanNumberOrNull(payload.paceSecPerKm);
+    if ("cadenceRpm" in payload) out.cadenceRpm = cleanNumberOrNull(payload.cadenceRpm);
 
-    if ("effortRpe" in payload) out.effortRpe = cleanNumberOrNull((payload as any).effortRpe);
+    if ("effortRpe" in payload) out.effortRpe = cleanNumberOrNull(payload.effortRpe);
 
-    if ("trainingSource" in payload) out.trainingSource = cleanStringOrNull((payload as any).trainingSource);
-    if ("dayEffortRpe" in payload) out.dayEffortRpe = cleanNumberOrNull((payload as any).dayEffortRpe);
+    if ("trainingSource" in payload) out.trainingSource = cleanStringOrNull(payload.trainingSource);
+    if ("dayEffortRpe" in payload) out.dayEffortRpe = cleanNumberOrNull(payload.dayEffortRpe);
+
+    return out;
+}
+
+function normalizeGymCheckExercisePatch(payload: unknown): GymCheckExercisePatch | null {
+    if (!isPlainObject(payload)) return null;
+
+    const out: GymCheckExercisePatch = {};
+
+    if ("done" in payload) {
+        out.done = cleanBooleanOrNull(payload.done);
+    }
+
+    if ("notes" in payload) {
+        out.notes = cleanStringOrNull(payload.notes);
+    }
+
+    if ("durationMin" in payload) {
+        out.durationMin = cleanNumberOrNull(payload.durationMin);
+    }
+
+    if ("mediaPublicIds" in payload) {
+        out.mediaPublicIds = cleanStringArrayOrNull(payload.mediaPublicIds);
+    }
+
+    if ("performedSets" in payload) {
+        out.performedSets = normalizeGymCheckExerciseSets(payload.performedSets);
+    }
 
     return out;
 }
@@ -587,47 +777,46 @@ function normalizeGymCheckDayPatch(payload: unknown): GymCheckDayPatch {
 
     const out: GymCheckDayPatch = {};
 
-    if ("durationMin" in payload) out.durationMin = cleanNumberOrNull((payload as any).durationMin);
-    if ("notes" in payload) out.notes = cleanStringOrNull((payload as any).notes);
+    if ("durationMin" in payload) out.durationMin = cleanNumberOrNull(payload.durationMin);
+    if ("notes" in payload) out.notes = cleanStringOrNull(payload.notes);
 
     if ("metrics" in payload) {
-        const raw = (payload as any).metrics;
-        if (raw === null) out.metrics = null;
-        else if (isPlainObject(raw)) out.metrics = normalizeGymCheckMetricsPatch(raw);
+        const rawMetrics = payload.metrics;
+        if (rawMetrics === null) {
+            out.metrics = null;
+        } else if (isPlainObject(rawMetrics)) {
+            out.metrics = normalizeGymCheckMetricsPatch(rawMetrics);
+        }
     }
 
     if ("exercises" in payload) {
-        const raw = (payload as any).exercises;
+        const rawExercises = payload.exercises;
 
-        if (raw === null) {
+        if (rawExercises === null) {
             out.exercises = null;
-        } else if (isPlainObject(raw)) {
+        } else if (isPlainObject(rawExercises)) {
             const map: Record<string, GymCheckExercisePatch> = {};
-            for (const [k, v] of Object.entries(raw)) {
-                if (!k || typeof k !== "string") continue;
 
-                if (v === null) {
-                    map[k] = { done: null, notes: null, durationMin: null, mediaPublicIds: null };
+            for (const [exerciseId, rawExercisePatch] of Object.entries(rawExercises)) {
+                if (!exerciseId) continue;
+
+                if (rawExercisePatch === null) {
+                    map[exerciseId] = {
+                        done: null,
+                        notes: null,
+                        durationMin: null,
+                        mediaPublicIds: null,
+                        performedSets: null,
+                    };
                     continue;
                 }
 
-                if (!isPlainObject(v)) continue;
+                const parsedExercisePatch = normalizeGymCheckExercisePatch(rawExercisePatch);
+                if (!parsedExercisePatch) continue;
 
-                const p: GymCheckExercisePatch = {};
-                if ("done" in v)
-                    p.done =
-                        typeof (v as any).done === "boolean"
-                            ? (v as any).done
-                            : (v as any).done === null
-                                ? null
-                                : undefined;
-
-                if ("notes" in v) p.notes = cleanStringOrNull((v as any).notes);
-                if ("durationMin" in v) p.durationMin = cleanNumberOrNull((v as any).durationMin);
-                if ("mediaPublicIds" in v) p.mediaPublicIds = cleanStringArrayOrNull((v as any).mediaPublicIds);
-
-                map[k] = p;
+                map[exerciseId] = parsedExercisePatch;
             }
+
             out.exercises = map;
         }
     }
@@ -635,17 +824,22 @@ function normalizeGymCheckDayPatch(payload: unknown): GymCheckDayPatch {
     return out;
 }
 
-export async function patchGymCheckDay(userId: string, weekKey: string, dayKey: DayKey, payload: unknown) {
+export async function patchGymCheckDay(
+    userId: string,
+    weekKey: string,
+    dayKey: DayKey,
+    payload: unknown
+) {
     const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
     if (!doc) return null;
 
     const patch = normalizeGymCheckDayPatch(payload);
 
-    const metaAny: any = isPlainObject(doc.meta) ? { ...(doc.meta as any) } : {};
-    const gymCheckAny: any = isPlainObject(metaAny.gymCheck) ? { ...(metaAny.gymCheck as any) } : {};
+    const currentMeta = isPlainObject(doc.meta) ? doc.meta : {};
+    const currentGymCheck = isPlainObject(currentMeta.gymCheck) ? (currentMeta.gymCheck as StoredGymCheckMap) : {};
 
-    const prevDay: any = isPlainObject(gymCheckAny[dayKey]) ? { ...(gymCheckAny[dayKey] as any) } : {};
-    const nextDay: any = { ...prevDay };
+    const prevDay = isPlainObject(currentGymCheck[dayKey]) ? (currentGymCheck[dayKey] as StoredGymCheckDay) : {};
+    const nextDay: StoredGymCheckDay = { ...prevDay };
 
     if ("durationMin" in patch) nextDay.durationMin = patch.durationMin ?? null;
     if ("notes" in patch) nextDay.notes = patch.notes ?? null;
@@ -653,8 +847,9 @@ export async function patchGymCheckDay(userId: string, weekKey: string, dayKey: 
     if ("metrics" in patch) {
         if (patch.metrics === null) {
             nextDay.metrics = null;
-        } else if (patch.metrics && typeof patch.metrics === "object") {
-            const prevMetrics = isPlainObject(prevDay.metrics) ? { ...(prevDay.metrics as any) } : {};
+        } else if (patch.metrics) {
+            const prevMetrics: StoredGymCheckMetrics =
+                isPlainObject(prevDay.metrics) ? { ...(prevDay.metrics as StoredGymCheckMetrics) } : {};
             nextDay.metrics = { ...prevMetrics, ...patch.metrics };
         }
     }
@@ -662,12 +857,14 @@ export async function patchGymCheckDay(userId: string, weekKey: string, dayKey: 
     if ("exercises" in patch) {
         if (patch.exercises === null) {
             nextDay.exercises = null;
-        } else if (patch.exercises && typeof patch.exercises === "object") {
-            const prevExercises: any = isPlainObject(prevDay.exercises) ? { ...(prevDay.exercises as any) } : {};
-            const nextExercises: any = { ...prevExercises };
+        } else if (patch.exercises) {
+            const prevExercises: Record<string, StoredGymCheckExercise> =
+                isPlainObject(prevDay.exercises) ? { ...(prevDay.exercises as Record<string, StoredGymCheckExercise>) } : {};
+
+            const nextExercises: Record<string, StoredGymCheckExercise> = { ...prevExercises };
 
             for (const [exerciseId, exPatch] of Object.entries(patch.exercises)) {
-                const prevEx = isPlainObject(prevExercises[exerciseId]) ? (prevExercises[exerciseId] as any) : null;
+                const prevEx = isPlainObject(prevExercises[exerciseId]) ? prevExercises[exerciseId] : null;
                 nextExercises[exerciseId] = mergeGymCheckExercise(prevEx, exPatch);
             }
 
@@ -675,16 +872,26 @@ export async function patchGymCheckDay(userId: string, weekKey: string, dayKey: 
         }
     }
 
-    gymCheckAny[dayKey] = nextDay;
-    metaAny.gymCheck = gymCheckAny;
+    const nextGymCheck: StoredGymCheckMap = {
+        ...currentGymCheck,
+        [dayKey]: nextDay,
+    };
 
-    doc.meta = metaAny as any;
+    doc.meta = {
+        ...currentMeta,
+        gymCheck: nextGymCheck,
+    };
 
     await doc.save();
     return doc.toJSON();
 }
 
-export async function patchRoutineGymCheckDay(userId: string, weekKey: string, dayKey: DayKey, payload: unknown) {
+export async function patchRoutineGymCheckDay(
+    userId: string,
+    weekKey: string,
+    dayKey: DayKey,
+    payload: unknown
+) {
     return patchGymCheckDay(userId, weekKey, dayKey, payload);
 }
 

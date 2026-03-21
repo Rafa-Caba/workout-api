@@ -59,6 +59,8 @@ export type Exercise = {
     meta: Record<string, unknown> | null;
 };
 
+export type CreateExerciseInput = Omit<Exercise, "id">;
+
 export type TrainingSession = {
     id: string;
     type: string;
@@ -86,10 +88,19 @@ export type TrainingSession = {
     notes: string | null;
     meta: Record<string, unknown> | null;
 
-    media: MediaItem[];
+    media: MediaItem[] | null;
 
     exercises: Exercise[] | null;
 };
+
+export type CreateTrainingSessionInput = Omit<
+    TrainingSession,
+    "id" | "media" | "exercises"
+> & {
+    exercises: CreateExerciseInput[] | null;
+};
+
+export type PatchTrainingSessionInput = Partial<CreateTrainingSessionInput>;
 
 export type TrainingBlock = {
     sessions: TrainingSession[] | null;
@@ -170,12 +181,6 @@ export type WorkoutDayDoc = {
     updatedAt: string;
 };
 
-/**
- * =========================================================
- * Builders outputs
- * =========================================================
- */
-
 export type CalendarTotals = {
     totalSessions: number;
 
@@ -238,11 +243,8 @@ export type CalendarDayFull = {
     hasPlanned?: boolean;
 
     sleep?: SleepBlock | null;
-
-    // actual training
     training?: TrainingBlock | null;
 
-    // planned routine (optional in views)
     plannedRoutine?: PlannedRoutine | null;
     plannedMeta?: PlannedMeta | null;
 
@@ -304,12 +306,6 @@ export type WeekViewResponse = {
     rollups?: WeekRollups;
 };
 
-/**
- * =========================================================
- * Service args
- * =========================================================
- */
-
 export type StatsRangeArgs = {
     userId: string;
     from: ISODate;
@@ -321,6 +317,6 @@ export type UpsertMode = "merge" | "replace";
 export type UpsertArgs = {
     userId: string;
     date: ISODate;
-    payload: any;
+    payload: unknown;
     mode: UpsertMode;
 };

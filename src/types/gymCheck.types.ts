@@ -1,8 +1,23 @@
+export type GymCheckExerciseSet = {
+    setIndex: number;
+    reps: number | null;
+    weight: number | null;
+    unit: "lb" | "kg";
+    rpe: number | null;
+    isWarmup: boolean;
+    isDropSet: boolean;
+    tempo: string | null;
+    restSec: number | null;
+    tags: string[] | null;
+    meta: Record<string, unknown> | null;
+};
+
 export type GymCheckExercisePatch = {
     done?: boolean | null;
     notes?: string | null;
     durationMin?: number | null;
     mediaPublicIds?: string[] | null;
+    performedSets?: GymCheckExerciseSet[] | null;
 };
 
 export type GymCheckMetricsPatch = {

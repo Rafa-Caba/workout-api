@@ -1,5 +1,15 @@
 import type { Request, Response, NextFunction } from "express";
-import type { ZodTypeAny, ZodError, ZodIssue } from "zod";
+import type { ZodTypeAny, ZodError } from "zod";
+
+declare global {
+    namespace Express {
+        interface Request {
+            validatedParams?: unknown;
+            validatedQuery?: unknown;
+            validatedBody?: unknown;
+        }
+    }
+}
 
 type Segment = "params" | "query" | "body";
 
@@ -16,18 +26,14 @@ type ValidationErrorPayload = {
     };
 };
 
-/**
- * Convert Zod issues into dot/bracket notation paths
- * e.g. training.sessions[0].exercises[1].sets[0].weight
- */
 const issuePathToKey = (path: PropertyKey[]): string => {
-    if (!path || path.length === 0) return "_form";
+    if (path.length === 0) return "_form";
 
     return path
-        .map((seg) => {
-            if (typeof seg === "string") return seg;
-            if (typeof seg === "number") return String(seg);
-            return seg.toString();
+        .map((segment) => {
+            if (typeof segment === "string") return segment;
+            if (typeof segment === "number") return String(segment);
+            return String(segment);
         })
         .join(".");
 };
@@ -68,51 +74,61 @@ const sendValidationError = (
     });
 };
 
+const buildValidator =
+    (schemas: ValidateSchemas) =>
+        (req: Request, res: Response, next: NextFunction): void | Response<ValidationErrorPayload> => {
+            if (schemas.params) {
+                const parsed = schemas.params.safeParse(req.params);
+                if (!parsed.success) {
+                    return sendValidationError(res, "Invalid route params", parsed.error);
+                }
+
+                req.validatedParams = parsed.data;
+            }
+
+            if (schemas.query) {
+                const parsed = schemas.query.safeParse(req.query);
+                if (!parsed.success) {
+                    return sendValidationError(res, "Invalid query params", parsed.error);
+                }
+
+                req.validatedQuery = parsed.data;
+            }
+
+            if (schemas.body) {
+                const parsed = schemas.body.safeParse(req.body);
+                if (!parsed.success) {
+                    return sendValidationError(res, "Invalid request body", parsed.error);
+                }
+
+                req.validatedBody = parsed.data;
+                req.body = parsed.data;
+            }
+
+            next();
+        };
+
 // Overloads
 export function validate(
     segment: Segment,
     schema: ZodTypeAny
-): (req: Request, res: Response, next: NextFunction) => void;
+): (req: Request, res: Response, next: NextFunction) => void | Response<ValidationErrorPayload>;
 
 export function validate(
     schemas: ValidateSchemas
-): (req: Request, res: Response, next: NextFunction) => void;
+): (req: Request, res: Response, next: NextFunction) => void | Response<ValidationErrorPayload>;
 
 export function validate(
-    a: Segment | ValidateSchemas,
-    b?: ZodTypeAny
+    arg1: Segment | ValidateSchemas,
+    arg2?: ZodTypeAny
 ) {
-    const schemas: ValidateSchemas =
-        typeof a === "string"
-            ? { [a]: b as ZodTypeAny }
-            : (a as ValidateSchemas);
-
-    return (req: Request, res: Response, next: NextFunction) => {
-        if (schemas.params) {
-            const parsed = schemas.params.safeParse(req.params);
-            if (!parsed.success) {
-                return sendValidationError(res, "Invalid route params", parsed.error);
-            }
-            (req as any).validatedParams = parsed.data;
+    if (typeof arg1 === "string") {
+        if (!arg2) {
+            throw new Error(`Missing schema for validate("${arg1}", schema)`);
         }
 
-        if (schemas.query) {
-            const parsed = schemas.query.safeParse(req.query);
-            if (!parsed.success) {
-                return sendValidationError(res, "Invalid query params", parsed.error);
-            }
-            (req as any).validatedQuery = parsed.data;
-        }
+        return buildValidator({ [arg1]: arg2 });
+    }
 
-        if (schemas.body) {
-            const parsed = schemas.body.safeParse(req.body);
-            if (!parsed.success) {
-                return sendValidationError(res, "Invalid request body", parsed.error);
-            }
-            (req as any).validatedBody = parsed.data;
-            req.body = parsed.data;
-        }
-
-        next();
-    };
+    return buildValidator(arg1);
 }

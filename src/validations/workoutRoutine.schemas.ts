@@ -105,12 +105,35 @@ export const routineGymCheckParamsSchema = z.object({
     dayKey: dayKeySchema,
 });
 
+const gymCheckExerciseSetSchema = z
+    .object({
+        setIndex: z.number().int().min(1).max(999),
+
+        reps: z.number().int().min(0).max(9999).nullable(),
+        weight: z.number().min(0).max(99999).nullable(),
+
+        unit: z.enum(["lb", "kg"]),
+
+        rpe: z.number().min(0).max(10).nullable(),
+
+        isWarmup: z.boolean(),
+        isDropSet: z.boolean(),
+
+        tempo: z.string().max(50).nullable(),
+        restSec: z.number().int().min(0).max(36000).nullable(),
+
+        tags: z.array(z.string().min(1)).nullable(),
+        meta: z.record(z.string(), z.unknown()).nullable(),
+    })
+    .strict();
+
 const gymCheckExercisePatchSchema = z
     .object({
         done: z.boolean().nullable().optional(),
         notes: z.string().max(3000).nullable().optional(),
         durationMin: z.number().min(0).max(24 * 60).nullable().optional(),
         mediaPublicIds: z.array(z.string().min(1)).nullable().optional(),
+        performedSets: z.array(gymCheckExerciseSetSchema).nullable().optional(),
     })
     .strict();
 

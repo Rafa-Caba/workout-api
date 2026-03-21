@@ -1,62 +1,167 @@
 import mongoose from "mongoose";
-import { WorkoutDayModel } from "../models/WorkoutDay.model";
+import type { HydratedDocument } from "mongoose";
+import { WorkoutDayModel, type WorkoutDayDocument } from "../models/WorkoutDay.model";
 import { deleteFromCloudinary } from "../utils/cloudinaryDelete";
+import type {
+    CreateTrainingSessionInput,
+    MediaItem,
+    PatchTrainingSessionInput,
+    TrainingSession,
+    WorkoutDayDoc,
+} from "../types/workoutDay.types";
 
 type ReturnMode = "day" | "session";
 
-const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
-
-const findSessionIndex = (dayDoc: any, sessionId: string): number => {
-    const sessions: any[] | null = dayDoc?.training?.sessions ?? null;
-    if (!sessions || !Array.isArray(sessions)) return -1;
-
-    return sessions.findIndex(
-        (s: any) => String(s?._id) === sessionId || String(s?.id) === sessionId
-    );
+export type SessionError = {
+    error: {
+        code: "NOT_FOUND";
+        message: string;
+        details: {
+            date?: string;
+            sessionId?: string;
+        };
+    };
 };
 
-const sessionToJson = (dayJson: any, sessionId: string) => {
-    const sessions: any[] | null = dayJson?.training?.sessions ?? null;
+type CloudinaryDeleteResult = {
+    publicId: string;
+    deleted: boolean;
+    error: string | null;
+};
+
+type DeleteSessionModeResponse = {
+    deleted: true;
+    sessionId: string;
+    mediaPreserved: boolean;
+    cloudinary: CloudinaryDeleteResult[] | null;
+};
+
+export type UpsertTrainingSessionResult =
+    | WorkoutDayDoc
+    | { session: TrainingSession | null }
+    | SessionError;
+
+export type DeleteTrainingSessionResult =
+    | (WorkoutDayDoc & {
+        mediaPreserved: boolean;
+        cloudinary?: CloudinaryDeleteResult[];
+    })
+    | DeleteSessionModeResponse
+    | SessionError;
+
+type WorkoutDayHydrated = HydratedDocument<WorkoutDayDocument>;
+
+type WorkoutDayJsonRaw = Omit<WorkoutDayDoc, "userId" | "createdAt" | "updatedAt"> & {
+    userId: string | mongoose.Types.ObjectId;
+    createdAt: string | Date;
+    updatedAt: string | Date;
+};
+
+const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
+
+const toIsoString = (value: string | Date): string => {
+    return value instanceof Date ? value.toISOString() : value;
+};
+
+const toWorkoutDayJson = (dayDoc: WorkoutDayHydrated): WorkoutDayDoc => {
+    const raw = dayDoc.toJSON() as unknown as WorkoutDayJsonRaw;
+
+    return {
+        ...raw,
+        userId: String(raw.userId),
+        createdAt: toIsoString(raw.createdAt),
+        updatedAt: toIsoString(raw.updatedAt),
+    };
+};
+
+const getSessions = (dayDoc: WorkoutDayHydrated) => {
+    const sessions = dayDoc.training?.sessions;
+    return Array.isArray(sessions) ? sessions : null;
+};
+
+const findSessionIndex = (dayDoc: WorkoutDayHydrated, sessionId: string): number => {
+    const sessions = getSessions(dayDoc);
+    if (!sessions) return -1;
+
+    return sessions.findIndex((session) => String(session._id) === sessionId);
+};
+
+const sessionToJson = (dayJson: WorkoutDayDoc, sessionId: string): TrainingSession | null => {
+    const sessions = dayJson.training?.sessions;
     if (!sessions || !Array.isArray(sessions)) return null;
-    return sessions.find((s: any) => String(s?.id) === sessionId) ?? null;
+
+    return sessions.find((session) => session.id === sessionId) ?? null;
+};
+
+const buildDayNotFoundError = (date: string): SessionError => ({
+    error: {
+        code: "NOT_FOUND",
+        message: "Workout day not found",
+        details: { date },
+    },
+});
+
+const buildSessionNotFoundError = (sessionId: string): SessionError => ({
+    error: {
+        code: "NOT_FOUND",
+        message: "Training session not found",
+        details: { sessionId },
+    },
+});
+
+const ensureTrainingBlock = (dayDoc: WorkoutDayHydrated): void => {
+    if (!dayDoc.training) {
+        dayDoc.set("training", {
+            sessions: [],
+            source: null,
+            dayEffortRpe: null,
+            raw: null,
+        });
+        return;
+    }
+
+    if (!Array.isArray(dayDoc.training.sessions)) {
+        dayDoc.set("training.sessions", []);
+    }
 };
 
 export const createTrainingSession = async (
     userId: string,
     date: string,
-    payload: any,
+    payload: CreateTrainingSessionInput,
     returnMode: ReturnMode
-) => {
+): Promise<UpsertTrainingSessionResult> => {
     const userObjectId = toObjectId(userId);
 
-    const dayDoc = await WorkoutDayModel.findOne({ userId: userObjectId, date });
+    const dayDoc = await WorkoutDayModel.findOne({
+        userId: userObjectId,
+        date,
+    });
+
     if (!dayDoc) {
-        return { error: { code: "NOT_FOUND", message: "Workout day not found", details: { date } } };
+        return buildDayNotFoundError(date);
     }
 
-    // Ensure training block exists
-    if (!dayDoc.training) {
-        dayDoc.training = { sessions: null, source: null, dayEffortRpe: null, raw: null } as any;
-    }
+    ensureTrainingBlock(dayDoc);
 
-    if (!Array.isArray((dayDoc as any).training.sessions)) {
-        (dayDoc as any).training.sessions = [];
-    }
-
-    (dayDoc as any).training.sessions.push({
+    dayDoc.training?.sessions?.push({
         ...payload,
-        media: null, // keep your “no block” semantics
+        media: null,
     });
 
     const saved = await dayDoc.save();
-    const outDay = saved.toJSON();
+    const outDay = toWorkoutDayJson(saved);
 
-    const createdSessionId = String(
-        (saved as any).training?.sessions?.[(saved as any).training.sessions.length - 1]?._id
-    );
+    const savedSessions = getSessions(saved);
+    const createdSessionId =
+        savedSessions && savedSessions.length > 0
+            ? String(savedSessions[savedSessions.length - 1]._id)
+            : "";
 
     if (returnMode === "session") {
-        return { session: sessionToJson(outDay, createdSessionId) };
+        return {
+            session: sessionToJson(outDay, createdSessionId),
+        };
     }
 
     return outDay;
@@ -66,37 +171,47 @@ export const patchTrainingSession = async (
     userId: string,
     date: string,
     sessionId: string,
-    payload: any,
+    payload: PatchTrainingSessionInput,
     returnMode: ReturnMode
-) => {
+): Promise<UpsertTrainingSessionResult> => {
     const userObjectId = toObjectId(userId);
 
-    const dayDoc = await WorkoutDayModel.findOne({ userId: userObjectId, date });
+    const dayDoc = await WorkoutDayModel.findOne({
+        userId: userObjectId,
+        date,
+    });
+
     if (!dayDoc) {
-        return { error: { code: "NOT_FOUND", message: "Workout day not found", details: { date } } };
+        return buildDayNotFoundError(date);
     }
 
-    const idx = findSessionIndex(dayDoc as any, sessionId);
+    const idx = findSessionIndex(dayDoc, sessionId);
     if (idx < 0) {
-        return { error: { code: "NOT_FOUND", message: "Training session not found", details: { sessionId } } };
+        return buildSessionNotFoundError(sessionId);
     }
 
-    const session = (dayDoc as any).training.sessions[idx];
+    const sessions = getSessions(dayDoc);
+    const session = sessions?.[idx] ?? null;
 
-    // Prevent media edits here (must use /media endpoints)
-    if (Object.prototype.hasOwnProperty.call(payload, "media")) {
-        delete payload.media;
+    if (!session) {
+        return buildSessionNotFoundError(sessionId);
     }
 
-    for (const [k, v] of Object.entries(payload)) {
-        (session as any)[k] = v;
+    for (const [key, value] of Object.entries(payload) as Array<
+        [keyof PatchTrainingSessionInput, PatchTrainingSessionInput[keyof PatchTrainingSessionInput]]
+    >) {
+        if (value !== undefined) {
+            session.set(String(key), value);
+        }
     }
 
     const saved = await dayDoc.save();
-    const outDay = saved.toJSON();
+    const outDay = toWorkoutDayJson(saved);
 
     if (returnMode === "session") {
-        return { session: sessionToJson(outDay, sessionId) };
+        return {
+            session: sessionToJson(outDay, sessionId),
+        };
     }
 
     return outDay;
@@ -108,29 +223,46 @@ export const deleteTrainingSession = async (
     sessionId: string,
     returnMode: ReturnMode,
     deleteMedia: boolean
-) => {
+): Promise<DeleteTrainingSessionResult> => {
     const userObjectId = toObjectId(userId);
 
-    const dayDoc = await WorkoutDayModel.findOne({ userId: userObjectId, date });
+    const dayDoc = await WorkoutDayModel.findOne({
+        userId: userObjectId,
+        date,
+    });
+
     if (!dayDoc) {
-        return { error: { code: "NOT_FOUND", message: "Workout day not found", details: { date } } };
+        return buildDayNotFoundError(date);
     }
 
-    const idx = findSessionIndex(dayDoc as any, sessionId);
+    const idx = findSessionIndex(dayDoc, sessionId);
     if (idx < 0) {
-        return { error: { code: "NOT_FOUND", message: "Training session not found", details: { sessionId } } };
+        return buildSessionNotFoundError(sessionId);
     }
 
-    const session = (dayDoc as any).training.sessions[idx];
-    const mediaArr: any[] = Array.isArray(session?.media) ? session.media : [];
+    const sessions = getSessions(dayDoc);
+    const session = sessions?.[idx] ?? null;
 
-    // Remove from DB first
-    (dayDoc as any).training.sessions.splice(idx, 1);
+    if (!session) {
+        return buildSessionNotFoundError(sessionId);
+    }
+
+    const mediaArr: MediaItem[] = Array.isArray(session.media)
+        ? session.media.map((media) => ({
+            publicId: media.publicId,
+            url: media.url,
+            resourceType: media.resourceType,
+            format: media.format ?? null,
+            createdAt: media.createdAt,
+            meta: media.meta ?? null,
+        }))
+        : [];
+
+    sessions?.splice(idx, 1);
 
     const saved = await dayDoc.save();
-    const outDay = saved.toJSON();
+    const outDay = toWorkoutDayJson(saved);
 
-    // Default: preserve media (for Media tab)
     if (!deleteMedia) {
         if (returnMode === "session") {
             return {
@@ -147,26 +279,40 @@ export const deleteTrainingSession = async (
         };
     }
 
-    // Explicit deletion requested
-    const cloudinaryResults: Array<{ publicId: string; deleted: boolean; error: string | null }> = [];
+    const cloudinaryResults: CloudinaryDeleteResult[] = [];
 
-    for (const m of mediaArr) {
-        const publicId = m?.publicId ? String(m.publicId) : null;
-        if (!publicId) continue;
-
-        const rt: "image" | "video" = m?.resourceType === "video" ? "video" : "image";
+    for (const media of mediaArr) {
+        const resourceType: "image" | "video" =
+            media.resourceType === "video" ? "video" : "image";
 
         try {
-            await deleteFromCloudinary(publicId, { resourceType: rt });
-            cloudinaryResults.push({ publicId, deleted: true, error: null });
-        } catch (err: any) {
-            cloudinaryResults.push({ publicId, deleted: false, error: String(err?.message ?? err) });
+            await deleteFromCloudinary(media.publicId, { resourceType });
+            cloudinaryResults.push({
+                publicId: media.publicId,
+                deleted: true,
+                error: null,
+            });
+        } catch (error) {
+            cloudinaryResults.push({
+                publicId: media.publicId,
+                deleted: false,
+                error: error instanceof Error ? error.message : String(error),
+            });
         }
     }
 
     if (returnMode === "session") {
-        return { deleted: true, sessionId, mediaPreserved: false, cloudinary: cloudinaryResults };
+        return {
+            deleted: true,
+            sessionId,
+            mediaPreserved: false,
+            cloudinary: cloudinaryResults,
+        };
     }
 
-    return { ...outDay, mediaPreserved: false, cloudinary: cloudinaryResults };
+    return {
+        ...outDay,
+        mediaPreserved: false,
+        cloudinary: cloudinaryResults,
+    };
 };

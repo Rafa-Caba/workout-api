@@ -1,5 +1,15 @@
 import mongoose, { Schema, type InferSchemaType, type Model } from "mongoose";
 
+type PlannedRoutineValidatorContext = {
+    training?:
+    | {
+        sessions?: unknown[] | null;
+    }
+    | null;
+    isNew: boolean;
+    isModified(path: string): boolean;
+};
+
 const WorkoutMediaItemSchema = new Schema(
     {
         publicId: { type: String, required: true, trim: true, maxlength: 300 },
@@ -13,7 +23,7 @@ const WorkoutMediaItemSchema = new Schema(
 
         format: { type: String, default: null, maxlength: 30 },
 
-        createdAt: { type: String, required: true }, // ISO datetime string
+        createdAt: { type: String, required: true },
 
         meta: { type: Schema.Types.Mixed, default: null },
     },
@@ -46,17 +56,10 @@ const WorkoutExerciseSetSchema = new Schema(
 const WorkoutExerciseSchema = new Schema(
     {
         name: { type: String, required: true, trim: true, maxlength: 200 },
-
-        // Future-proofing: optional link to a canonical movement registry later
         movementId: { type: String, default: null, trim: true, maxlength: 120 },
-
+        movementName: { type: String, default: null, trim: true, maxlength: 200 },
         notes: { type: String, default: null, maxlength: 5000 },
-
-        // IMPORTANT:
-        // - default null keeps “no block” semantics
-        // - [] means explicitly set to empty list
         sets: { type: [WorkoutExerciseSetSchema], default: null },
-
         meta: { type: Schema.Types.Mixed, default: null },
     },
     { _id: true }
@@ -66,8 +69,8 @@ const WorkoutSessionSchema = new Schema(
     {
         type: { type: String, required: true, trim: true, maxlength: 120 },
 
-        startAt: { type: String, default: null }, // ISO datetime string
-        endAt: { type: String, default: null }, // ISO datetime string
+        startAt: { type: String, default: null },
+        endAt: { type: String, default: null },
 
         durationSeconds: { type: Number, default: null, min: 0 },
 
@@ -84,20 +87,10 @@ const WorkoutSessionSchema = new Schema(
         paceSecPerKm: { type: Number, default: null, min: 0 },
         cadenceRpm: { type: Number, default: null, min: 0 },
 
-        effortRpe: { type: Number, default: null, min: 1, max: 10 },
+        effortRpe: { type: Number, default: null, min: 0, max: 10 },
         notes: { type: String, default: null, maxlength: 5000 },
 
-        /**
-         * Media attached to THIS session
-         * - default null keeps previous "no block" semantics
-         */
         media: { type: [WorkoutMediaItemSchema], default: null },
-
-        /**
-         * Exercises performed in THIS session (NEW)
-         * - default null keeps previous "no block" semantics
-         * - [] means explicitly set to empty list
-         */
         exercises: { type: [WorkoutExerciseSchema], default: null },
 
         meta: { type: Schema.Types.Mixed, default: null },
@@ -110,7 +103,7 @@ const TrainingBlockSchema = new Schema(
         sessions: { type: [WorkoutSessionSchema], default: null },
 
         source: { type: String, default: null, maxlength: 120 },
-        dayEffortRpe: { type: Number, default: null, min: 1, max: 10 },
+        dayEffortRpe: { type: Number, default: null, min: 0, max: 10 },
 
         raw: { type: Schema.Types.Mixed, default: null },
     },
@@ -120,9 +113,7 @@ const TrainingBlockSchema = new Schema(
 const SleepBlockSchema = new Schema(
     {
         timeAsleepMinutes: { type: Number, default: null, min: 0 },
-
         timeInBedMinutes: { type: Number, default: null, min: 0 },
-
         score: { type: Number, default: null, min: 0, max: 100 },
 
         awakeMinutes: { type: Number, default: null, min: 0 },
@@ -136,9 +127,6 @@ const SleepBlockSchema = new Schema(
     { _id: false }
 );
 
-/**
- * Planned routine (trainer-owned / template-owned) - mirrors routine-day shape.
- */
 const PlannedRoutineExerciseSchema = new Schema(
     {
         id: { type: String, required: true, trim: true, maxlength: 80 },
@@ -175,7 +163,7 @@ const PlannedRoutineSchema = new Schema(
 const PlannedMetaSchema = new Schema(
     {
         plannedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
-        plannedAt: { type: String, required: true }, // ISO datetime string
+        plannedAt: { type: String, required: true },
         source: { type: String, enum: ["trainer", "template"], default: null },
     },
     { _id: false }
@@ -190,27 +178,17 @@ const WorkoutDaySchema = new Schema(
             index: true,
         },
 
-        date: { type: String, required: true, index: true }, // YYYY-MM-DD
-        weekKey: { type: String, required: true, index: true }, // e.g. 2026-W03
+        date: { type: String, required: true, index: true },
+        weekKey: { type: String, required: true, index: true },
 
         sleep: { type: SleepBlockSchema, default: null },
-
-        /**
-         * Actual training (trainee-owned). Kept as-is (existing field).
-         */
         training: { type: TrainingBlockSchema, default: null },
 
-        /**
-         * Planned routine (trainer-owned / template-owned).
-         */
         plannedRoutine: {
             type: PlannedRoutineSchema,
             default: null,
             validate: {
-                // MVP locking rule:
-                // If actual training exists for that day, block overwrite of plannedRoutine
-                // (allow on new doc creation; block on modifications to plannedRoutine).
-                validator: function (this: any, _v: unknown) {
+                validator: function (this: PlannedRoutineValidatorContext) {
                     const hasActualTraining =
                         !!this.training &&
                         (Array.isArray(this.training.sessions)
@@ -219,8 +197,6 @@ const WorkoutDaySchema = new Schema(
 
                     if (!hasActualTraining) return true;
 
-                    // If actual training exists, do not allow changing plannedRoutine
-                    // once the document already exists.
                     if (!this.isNew && this.isModified("plannedRoutine")) {
                         return false;
                     }
@@ -245,30 +221,38 @@ const WorkoutDaySchema = new Schema(
             transform: (_doc, ret: any) => {
                 const { _id, __v, ...rest } = ret;
 
-                // Map session _id -> id
-                if (rest.training?.sessions?.length) {
-                    rest.training.sessions = rest.training.sessions.map((s: any) => {
-                        const { _id: sId, ...sRest } = s;
+                if (Array.isArray(rest.training?.sessions)) {
+                    rest.training.sessions = rest.training.sessions.map((session: any) => {
+                        const { _id: sessionId, ...sessionRest } = session;
 
-                        // Map exercise _id -> id (inside session)
-                        if (sRest.exercises?.length) {
-                            sRest.exercises = sRest.exercises.map((ex: any) => {
-                                const { _id: exId, ...exRest } = ex;
-                                return { id: String(exId), ...exRest };
+                        if (Array.isArray(sessionRest.exercises)) {
+                            sessionRest.exercises = sessionRest.exercises.map((exercise: any) => {
+                                const { _id: exerciseId, ...exerciseRest } = exercise;
+                                return {
+                                    id: String(exerciseId),
+                                    ...exerciseRest,
+                                };
                             });
                         }
 
-                        return { id: String(sId), ...sRest };
+                        return {
+                            id: String(sessionId),
+                            ...sessionRest,
+                        };
                     });
                 }
 
-                return { id: String(_id), ...rest };
+                return {
+                    id: String(_id),
+                    ...rest,
+                    createdAt: new Date(rest.createdAt).toISOString(),
+                    updatedAt: new Date(rest.updatedAt).toISOString(),
+                };
             },
         },
     }
 );
 
-// Unique constraint: one day per user per date
 WorkoutDaySchema.index({ userId: 1, date: 1 }, { unique: true });
 
 export type WorkoutDayDocument = InferSchemaType<typeof WorkoutDaySchema> & {
