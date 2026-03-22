@@ -306,6 +306,8 @@ export type WeekViewResponse = {
     rollups?: WeekRollups;
 };
 
+// src/types/workoutDay.types.ts
+
 export type StatsRangeArgs = {
     userId: string;
     from: ISODate;
@@ -314,9 +316,36 @@ export type StatsRangeArgs = {
 
 export type UpsertMode = "merge" | "replace";
 
+/**
+ * Payload accepted by workout day upsert/update flows.
+ *
+ * It is intentionally partial because the backend may receive only
+ * a subset of the WorkoutDay fields in merge mode.
+ *
+ * We exclude identity fields that are derived or controlled by the service:
+ * - id
+ * - userId
+ * - date
+ * - weekKey
+ * - createdAt
+ * - updatedAt
+ */
+export type WorkoutDayUpsertPayload = Partial<
+    Pick<
+        WorkoutDayDoc,
+        | "sleep"
+        | "training"
+        | "plannedRoutine"
+        | "plannedMeta"
+        | "notes"
+        | "tags"
+        | "meta"
+    >
+>;
+
 export type UpsertArgs = {
     userId: string;
     date: ISODate;
-    payload: unknown;
+    payload: WorkoutDayUpsertPayload;
     mode: UpsertMode;
 };

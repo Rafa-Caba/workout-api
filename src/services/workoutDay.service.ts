@@ -1,18 +1,68 @@
 // src/services/workoutDay.service.ts
 
 import mongoose from "mongoose";
+
 import { WorkoutDayModel } from "../models/WorkoutDay.model";
-import { getWeekKeyFromISODate } from "../utils/weekKey";
+import { assertMovementsExist } from "./movement.service";
+
 import {
     DEFAULT_FIELDS_ALL,
-    pickFields,
-    enumerateDays,
     buildCalendarDay,
-    rollupFromDays,
+    enumerateDays,
     getWeekRangeFromKey,
+    pickFields,
+    rollupFromDays,
 } from "../utils/workoutDayBuilders";
-import type { BuildOpts, StatsRangeArgs, UpsertArgs, WeekViewResponse } from "../types/workoutDay.types";
-import { assertMovementsExist } from "./movement.service";
+import { getWeekKeyFromISODate } from "../utils/weekKey";
+
+import type {
+    BuildOpts,
+    CalendarDayFull,
+    Exercise,
+    ExerciseSet,
+    MediaItem,
+    PlannedMeta,
+    PlannedRoutine,
+    PlannedRoutineExercise,
+    SleepBlock,
+    StatsRangeArgs,
+    TrainingBlock,
+    TrainingSession,
+    UpsertArgs,
+    WeekViewResponse,
+} from "../types/workoutDay.types";
+
+/**
+ * =========================================================
+ * Service-local helper types
+ * =========================================================
+ */
+
+type WorkoutDayUpsertPayload = UpsertArgs["payload"];
+
+type WorkoutDayCreateInput = {
+    userId: mongoose.Types.ObjectId;
+    date: string;
+    weekKey: string;
+    sleep: SleepBlock | null;
+    training: TrainingBlock | null;
+    plannedRoutine: PlannedRoutine | null;
+    plannedMeta: PlannedMeta | null;
+    notes: string | null;
+    tags: string[] | null;
+    meta: Record<string, unknown> | null;
+};
+
+type CalendarRangeResponse = {
+    from: string;
+    to: string;
+    fields: string[] | null;
+    fillMissingDays: boolean;
+    days: CalendarDayFull[];
+    rollups?: ReturnType<typeof rollupFromDays>;
+};
+
+type PlainObject = Record<string, unknown>;
 
 /**
  * =========================================================
@@ -29,17 +79,351 @@ const safeSumOrNull = (sum: number, count: number): number | null => {
     return count > 0 ? sum : null;
 };
 
-const isPlainObject = (v: unknown): v is Record<string, unknown> => {
-    return typeof v === "object" && v !== null && !Array.isArray(v);
+const isPlainObject = (value: unknown): value is PlainObject => {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 };
 
-const hasOwn = (obj: any, key: string) => Object.prototype.hasOwnProperty.call(obj, key);
+const hasOwn = (obj: unknown, key: string): boolean => {
+    return isPlainObject(obj) && Object.prototype.hasOwnProperty.call(obj, key);
+};
+
+const isFiniteNumber = (value: unknown): value is number => {
+    return typeof value === "number" && Number.isFinite(value);
+};
+
+const toNullableNumber = (value: unknown): number | null => {
+    return isFiniteNumber(value) ? value : null;
+};
+
+const toNullableString = (value: unknown): string | null => {
+    return typeof value === "string" ? value : null;
+};
+
+const toNullableStringArray = (value: unknown): string[] | null => {
+    if (value === null) return null;
+    if (!Array.isArray(value)) return null;
+
+    const out = value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item) => item.length > 0);
+
+    return out;
+};
+
+const toNullableMeta = (value: unknown): Record<string, unknown> | null => {
+    if (value === null) return null;
+    return isPlainObject(value) ? value : null;
+};
+
+const toExerciseSetUnit = (value: unknown): "lb" | "kg" => {
+    return value === "kg" ? "kg" : "lb";
+};
+
+const normalizeMediaItem = (value: unknown): MediaItem | null => {
+    if (!isPlainObject(value)) return null;
+
+    const publicId = toNullableString(value.publicId);
+    const url = toNullableString(value.url);
+    const resourceType = value.resourceType === "video" ? "video" : "image";
+
+    if (!publicId || !url) return null;
+
+    return {
+        publicId,
+        url,
+        resourceType,
+        format: toNullableString(value.format),
+        createdAt: toNullableString(value.createdAt) ?? "",
+        meta: toNullableMeta(value.meta),
+    };
+};
+
+const normalizeExerciseSet = (value: unknown, fallbackIndex: number): ExerciseSet | null => {
+    if (!isPlainObject(value)) return null;
+
+    return {
+        setIndex: isFiniteNumber(value.setIndex) ? Math.trunc(value.setIndex) : fallbackIndex,
+        reps: toNullableNumber(value.reps),
+        weight: toNullableNumber(value.weight),
+        unit: toExerciseSetUnit(value.unit),
+        rpe: toNullableNumber(value.rpe),
+        isWarmup: value.isWarmup === true,
+        isDropSet: value.isDropSet === true,
+        tempo: toNullableString(value.tempo),
+        restSec: toNullableNumber(value.restSec),
+        tags: toNullableStringArray(value.tags),
+        meta: toNullableMeta(value.meta),
+    };
+};
+
+const normalizeExercise = (value: unknown): Exercise | null => {
+    if (!isPlainObject(value)) return null;
+
+    const id = toNullableString(value.id) ?? toNullableString(value._id);
+    const name = toNullableString(value.name);
+
+    if (!id || !name) return null;
+
+    const rawSets = Array.isArray(value.sets) ? value.sets : null;
+    const sets =
+        rawSets === null
+            ? null
+            : rawSets
+                .map((item, index) => normalizeExerciseSet(item, index + 1))
+                .filter((item): item is ExerciseSet => item !== null);
+
+    return {
+        id,
+        name,
+        movementId: toNullableString(value.movementId),
+        movementName: toNullableString(value.movementName),
+        notes: toNullableString(value.notes),
+        sets,
+        meta: toNullableMeta(value.meta),
+    };
+};
+
+const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
+    if (!isPlainObject(value)) return null;
+
+    const id = toNullableString(value.id) ?? toNullableString(value._id);
+    const type = toNullableString(value.type);
+
+    if (!id || !type) return null;
+
+    const mediaRaw = Array.isArray(value.media) ? value.media : null;
+    const exercisesRaw = Array.isArray(value.exercises) ? value.exercises : null;
+
+    return {
+        id,
+        type,
+        startAt: toNullableString(value.startAt),
+        endAt: toNullableString(value.endAt),
+        durationSeconds: toNullableNumber(value.durationSeconds),
+        activeKcal: toNullableNumber(value.activeKcal),
+        totalKcal: toNullableNumber(value.totalKcal),
+        avgHr: toNullableNumber(value.avgHr),
+        maxHr: toNullableNumber(value.maxHr),
+        distanceKm: toNullableNumber(value.distanceKm),
+        steps: toNullableNumber(value.steps),
+        elevationGainM: toNullableNumber(value.elevationGainM),
+        paceSecPerKm: toNullableNumber(value.paceSecPerKm),
+        cadenceRpm: toNullableNumber(value.cadenceRpm),
+        effortRpe: toNullableNumber(value.effortRpe),
+        notes: toNullableString(value.notes),
+        meta: toNullableMeta(value.meta),
+        media:
+            mediaRaw === null
+                ? null
+                : mediaRaw
+                    .map((item) => normalizeMediaItem(item))
+                    .filter((item): item is MediaItem => item !== null),
+        exercises:
+            exercisesRaw === null
+                ? null
+                : exercisesRaw
+                    .map((item) => normalizeExercise(item))
+                    .filter((item): item is Exercise => item !== null),
+    };
+};
+
+const normalizeTrainingBlock = (value: unknown): TrainingBlock | null => {
+    if (value === null) return null;
+    if (!isPlainObject(value)) return null;
+
+    const sessionsRaw = Array.isArray(value.sessions) ? value.sessions : null;
+
+    return {
+        sessions:
+            sessionsRaw === null
+                ? null
+                : sessionsRaw
+                    .map((item) => normalizeTrainingSession(item))
+                    .filter((item): item is TrainingSession => item !== null),
+        source: toNullableString(value.source),
+        dayEffortRpe: toNullableNumber(value.dayEffortRpe),
+        raw: value.raw ?? null,
+    };
+};
+
+const normalizeSleepBlock = (value: unknown): SleepBlock | null => {
+    if (value === null) return null;
+    if (!isPlainObject(value)) return null;
+
+    return {
+        timeAsleepMinutes: toNullableNumber(value.timeAsleepMinutes),
+        timeInBedMinutes: toNullableNumber(value.timeInBedMinutes),
+        score: toNullableNumber(value.score),
+        awakeMinutes: toNullableNumber(value.awakeMinutes),
+        remMinutes: toNullableNumber(value.remMinutes),
+        coreMinutes: toNullableNumber(value.coreMinutes),
+        deepMinutes: toNullableNumber(value.deepMinutes),
+        source: toNullableString(value.source),
+        raw: value.raw ?? null,
+    };
+};
+
+const normalizePlannedRoutineExercise = (value: unknown): PlannedRoutineExercise | null => {
+    if (!isPlainObject(value)) return null;
+
+    const id = toNullableString(value.id);
+    const name = toNullableString(value.name);
+
+    if (!id || !name) return null;
+
+    return {
+        id,
+        name,
+        movementId: toNullableString(value.movementId),
+        movementName: toNullableString(value.movementName),
+        sets: toNullableNumber(value.sets),
+        reps: toNullableString(value.reps),
+        rpe: toNullableNumber(value.rpe),
+        load: toNullableString(value.load),
+        notes: toNullableString(value.notes),
+        attachmentPublicIds: toNullableStringArray(value.attachmentPublicIds),
+    };
+};
+
+const normalizePlannedRoutine = (value: unknown): PlannedRoutine | null => {
+    if (value === null) return null;
+    if (!isPlainObject(value)) return null;
+
+    const exercisesRaw = Array.isArray(value.exercises) ? value.exercises : null;
+
+    return {
+        sessionType: toNullableString(value.sessionType),
+        focus: toNullableString(value.focus),
+        exercises:
+            exercisesRaw === null
+                ? null
+                : exercisesRaw
+                    .map((item) => normalizePlannedRoutineExercise(item))
+                    .filter((item): item is PlannedRoutineExercise => item !== null),
+        notes: toNullableString(value.notes),
+        tags: toNullableStringArray(value.tags),
+    };
+};
+
+const normalizePlannedMeta = (value: unknown): PlannedMeta | null => {
+    if (value === null) return null;
+    if (!isPlainObject(value)) return null;
+
+    const plannedByRaw = value.plannedBy;
+    const plannedBy =
+        typeof plannedByRaw === "string"
+            ? plannedByRaw
+            : isPlainObject(plannedByRaw) && typeof plannedByRaw.toString === "function"
+                ? plannedByRaw.toString()
+                : plannedByRaw instanceof mongoose.Types.ObjectId
+                    ? plannedByRaw.toString()
+                    : typeof plannedByRaw?.toString === "function"
+                        ? plannedByRaw.toString()
+                        : null;
+
+    const plannedAt = toNullableString(value.plannedAt);
+
+    if (!plannedBy || !plannedAt) return null;
+
+    return {
+        plannedBy,
+        plannedAt,
+        source: value.source === "trainer" || value.source === "template" ? value.source : null,
+    };
+};
+
+/**
+ * Converts a picked/partial object into a CalendarDayFull-safe object.
+ * CalendarDayFull uses optional fields, so partials are allowed.
+ */
+const normalizeCalendarDayFull = (value: unknown): CalendarDayFull => {
+    if (!isPlainObject(value)) {
+        return {};
+    }
+
+    return {
+        date: toNullableString(value.date) ?? undefined,
+        weekKey: toNullableString(value.weekKey) ?? undefined,
+
+        hasSleep: typeof value.hasSleep === "boolean" ? value.hasSleep : undefined,
+        hasTraining: typeof value.hasTraining === "boolean" ? value.hasTraining : undefined,
+        hasPlanned: typeof value.hasPlanned === "boolean" ? value.hasPlanned : undefined,
+
+        sleep: hasOwn(value, "sleep") ? normalizeSleepBlock(value.sleep) : undefined,
+        training: hasOwn(value, "training") ? normalizeTrainingBlock(value.training) : undefined,
+        plannedRoutine: hasOwn(value, "plannedRoutine") ? normalizePlannedRoutine(value.plannedRoutine) : undefined,
+        plannedMeta: hasOwn(value, "plannedMeta") ? normalizePlannedMeta(value.plannedMeta) : undefined,
+
+        notes: hasOwn(value, "notes") ? toNullableString(value.notes) : undefined,
+        tags: hasOwn(value, "tags") ? toNullableStringArray(value.tags) : undefined,
+        meta: hasOwn(value, "meta") ? toNullableMeta(value.meta) : undefined,
+
+        sleepSummary: hasOwn(value, "sleepSummary") && isPlainObject(value.sleepSummary)
+            ? {
+                timeAsleepMinutes: toNullableNumber(value.sleepSummary.timeAsleepMinutes),
+                timeInBedMinutes: toNullableNumber(value.sleepSummary.timeInBedMinutes),
+                score: toNullableNumber(value.sleepSummary.score),
+                awakeMinutes: toNullableNumber(value.sleepSummary.awakeMinutes),
+                remMinutes: toNullableNumber(value.sleepSummary.remMinutes),
+                coreMinutes: toNullableNumber(value.sleepSummary.coreMinutes),
+                deepMinutes: toNullableNumber(value.sleepSummary.deepMinutes),
+            }
+            : undefined,
+
+        trainingSummary: hasOwn(value, "trainingSummary") && isPlainObject(value.trainingSummary)
+            ? {
+                source: toNullableString(value.trainingSummary.source),
+                dayEffortRpe: toNullableNumber(value.trainingSummary.dayEffortRpe),
+                sessionsCount: toNullableNumber(value.trainingSummary.sessionsCount) ?? 0,
+            }
+            : undefined,
+
+        trainingTotals: hasOwn(value, "trainingTotals") && isPlainObject(value.trainingTotals)
+            ? {
+                totalSessions: toNullableNumber(value.trainingTotals.totalSessions) ?? 0,
+                totalDurationSeconds: toNullableNumber(value.trainingTotals.totalDurationSeconds),
+                totalActiveKcal: toNullableNumber(value.trainingTotals.totalActiveKcal),
+                totalKcal: toNullableNumber(value.trainingTotals.totalKcal),
+                totalDistanceKm: toNullableNumber(value.trainingTotals.totalDistanceKm),
+                totalSteps: toNullableNumber(value.trainingTotals.totalSteps),
+                totalElevationGainM: toNullableNumber(value.trainingTotals.totalElevationGainM),
+                avgHr: toNullableNumber(value.trainingTotals.avgHr),
+                maxHr: toNullableNumber(value.trainingTotals.maxHr),
+                avgPaceSecPerKm: toNullableNumber(value.trainingTotals.avgPaceSecPerKm),
+                avgCadenceRpm: toNullableNumber(value.trainingTotals.avgCadenceRpm),
+            }
+            : undefined,
+
+        trainingTypes:
+            hasOwn(value, "trainingTypes") && Array.isArray(value.trainingTypes)
+                ? value.trainingTypes
+                    .filter((item): item is PlainObject => isPlainObject(item))
+                    .map((item) => ({
+                        type: toNullableString(item.type) ?? "",
+                        sessions: toNullableNumber(item.sessions) ?? 0,
+                        totalDurationSeconds: toNullableNumber(item.totalDurationSeconds),
+                        totalActiveKcal: toNullableNumber(item.totalActiveKcal),
+                        totalKcal: toNullableNumber(item.totalKcal),
+                        totalDistanceKm: toNullableNumber(item.totalDistanceKm),
+                        totalSteps: toNullableNumber(item.totalSteps),
+                        totalElevationGainM: toNullableNumber(item.totalElevationGainM),
+                        avgHr: toNullableNumber(item.avgHr),
+                        maxHr: toNullableNumber(item.maxHr),
+                        avgPaceSecPerKm: toNullableNumber(item.avgPaceSecPerKm),
+                        avgCadenceRpm: toNullableNumber(item.avgCadenceRpm),
+                    }))
+                : undefined,
+    };
+};
 
 /**
  * Canonical defaults for a WorkoutDay document (user + date scoped).
  * NOTE: weekKey is derived from date and always enforced.
  */
-const buildCanonicalDefaults = (userObjectId: mongoose.Types.ObjectId, date: string) => {
+const buildCanonicalDefaults = (
+    userObjectId: mongoose.Types.ObjectId,
+    date: string
+): WorkoutDayCreateInput => {
     const weekKey = getWeekKeyFromISODate(date);
 
     return {
@@ -49,6 +433,8 @@ const buildCanonicalDefaults = (userObjectId: mongoose.Types.ObjectId, date: str
 
         sleep: null,
         training: null,
+        plannedRoutine: null,
+        plannedMeta: null,
 
         notes: null,
         tags: null,
@@ -63,41 +449,96 @@ const buildCanonicalDefaults = (userObjectId: mongoose.Types.ObjectId, date: str
  * - if field is object => shallow merge (existing + incoming)
  * - training.sessions (array): if provided (even empty array) => replace; if undefined => keep
  */
-const mergeTrainingBlock = (existing: any, incoming: any): any => {
-    if (incoming === undefined) return existing;
+const mergeTrainingBlock = (
+    existing: unknown,
+    incoming: WorkoutDayUpsertPayload["training"] | undefined
+): TrainingBlock | null => {
+    const normalizedExisting = normalizeTrainingBlock(existing);
+
+    if (incoming === undefined) return normalizedExisting;
     if (incoming === null) return null;
 
-    if (!isPlainObject(incoming)) return incoming;
-
-    const out: any = isPlainObject(existing) ? { ...existing } : {};
-
-    // sessions: replace only if explicitly provided (allow [] to persist)
-    if (hasOwn(incoming, "sessions")) {
-        out.sessions = (incoming as any).sessions ?? null;
-    }
-
-    // merge the rest shallowly
-    for (const [k, v] of Object.entries(incoming)) {
-        if (k === "sessions") continue;
-        out[k] = v as any;
-    }
-
-    return out;
+    return {
+        sessions: hasOwn(incoming, "sessions") ? (incoming.sessions ?? null) : normalizedExisting?.sessions ?? null,
+        source: incoming.source ?? normalizedExisting?.source ?? null,
+        dayEffortRpe: incoming.dayEffortRpe ?? normalizedExisting?.dayEffortRpe ?? null,
+        raw: incoming.raw ?? normalizedExisting?.raw ?? null,
+    };
 };
 
-const mergeSleepBlock = (existing: any, incoming: any): any => {
-    if (incoming === undefined) return existing;
+const mergeSleepBlock = (
+    existing: unknown,
+    incoming: WorkoutDayUpsertPayload["sleep"] | undefined
+): SleepBlock | null => {
+    const normalizedExisting = normalizeSleepBlock(existing);
+
+    if (incoming === undefined) return normalizedExisting;
     if (incoming === null) return null;
-    if (!isPlainObject(incoming)) return incoming;
-    const base = isPlainObject(existing) ? existing : {};
-    return { ...base, ...incoming };
+
+    return {
+        timeAsleepMinutes: incoming.timeAsleepMinutes ?? normalizedExisting?.timeAsleepMinutes ?? null,
+        timeInBedMinutes: incoming.timeInBedMinutes ?? normalizedExisting?.timeInBedMinutes ?? null,
+        score: incoming.score ?? normalizedExisting?.score ?? null,
+        awakeMinutes: incoming.awakeMinutes ?? normalizedExisting?.awakeMinutes ?? null,
+        remMinutes: incoming.remMinutes ?? normalizedExisting?.remMinutes ?? null,
+        coreMinutes: incoming.coreMinutes ?? normalizedExisting?.coreMinutes ?? null,
+        deepMinutes: incoming.deepMinutes ?? normalizedExisting?.deepMinutes ?? null,
+        source: incoming.source ?? normalizedExisting?.source ?? null,
+        raw: incoming.raw ?? normalizedExisting?.raw ?? null,
+    };
 };
 
-const mergeGeneric = (existing: any, incoming: any): any => {
-    if (incoming === undefined) return existing;
+const mergePlannedRoutine = (
+    existing: unknown,
+    incoming: WorkoutDayUpsertPayload["plannedRoutine"] | undefined
+): PlannedRoutine | null => {
+    const normalizedExisting = normalizePlannedRoutine(existing);
+
+    if (incoming === undefined) return normalizedExisting;
     if (incoming === null) return null;
-    if (isPlainObject(existing) && isPlainObject(incoming)) return { ...existing, ...incoming };
+
     return incoming;
+};
+
+const mergePlannedMeta = (
+    existing: unknown,
+    incoming: WorkoutDayUpsertPayload["plannedMeta"] | undefined
+): PlannedMeta | null => {
+    const normalizedExisting = normalizePlannedMeta(existing);
+
+    if (incoming === undefined) return normalizedExisting;
+    if (incoming === null) return null;
+
+    return incoming;
+};
+
+const mergeNotes = (existing: unknown, incoming: WorkoutDayUpsertPayload["notes"] | undefined): string | null => {
+    const normalizedExisting = toNullableString(existing);
+
+    if (incoming === undefined) return normalizedExisting;
+    return incoming;
+};
+
+const mergeTags = (existing: unknown, incoming: WorkoutDayUpsertPayload["tags"] | undefined): string[] | null => {
+    const normalizedExisting = toNullableStringArray(existing);
+
+    if (incoming === undefined) return normalizedExisting;
+    return incoming;
+};
+
+const mergeMeta = (
+    existing: unknown,
+    incoming: WorkoutDayUpsertPayload["meta"] | undefined
+): Record<string, unknown> | null => {
+    const normalizedExisting = toNullableMeta(existing);
+
+    if (incoming === undefined) return normalizedExisting;
+    if (incoming === null) return null;
+
+    return {
+        ...(normalizedExisting ?? {}),
+        ...incoming,
+    };
 };
 
 /**
@@ -106,22 +547,62 @@ const mergeGeneric = (existing: any, incoming: any): any => {
  * - weekKey is always recomputed from date
  * - does not allow overwriting userId/date/weekKey
  */
-const applyFullReplace = (userObjectId: mongoose.Types.ObjectId, date: string, payload: any) => {
+const applyFullReplace = (
+    userObjectId: mongoose.Types.ObjectId,
+    date: string,
+    payload: WorkoutDayUpsertPayload
+): WorkoutDayCreateInput => {
     const base = buildCanonicalDefaults(userObjectId, date);
 
-    const out: any = { ...base };
+    const out: WorkoutDayCreateInput = { ...base };
 
-    if (hasOwn(payload, "sleep")) out.sleep = payload.sleep;
-    if (hasOwn(payload, "training")) out.training = payload.training;
+    if (hasOwn(payload, "sleep")) out.sleep = payload.sleep ?? null;
+    if (hasOwn(payload, "training")) out.training = payload.training ?? null;
+    if (hasOwn(payload, "plannedRoutine")) out.plannedRoutine = payload.plannedRoutine ?? null;
+    if (hasOwn(payload, "plannedMeta")) out.plannedMeta = payload.plannedMeta ?? null;
 
-    if (hasOwn(payload, "notes")) out.notes = payload.notes;
-    if (hasOwn(payload, "tags")) out.tags = payload.tags;
-    if (hasOwn(payload, "meta")) out.meta = payload.meta;
+    if (hasOwn(payload, "notes")) out.notes = payload.notes ?? null;
+    if (hasOwn(payload, "tags")) out.tags = payload.tags ?? null;
+    if (hasOwn(payload, "meta")) out.meta = payload.meta ?? null;
 
-    // Enforce weekKey from date no matter what
     out.weekKey = getWeekKeyFromISODate(date);
 
     return out;
+};
+
+const collectMovementIdsFromPayload = (payload: WorkoutDayUpsertPayload): string[] => {
+    const ids: string[] = [];
+
+    const sessions = payload.training?.sessions;
+    if (!Array.isArray(sessions)) return ids;
+
+    for (const session of sessions) {
+        const exercises = session.exercises;
+        if (!Array.isArray(exercises)) continue;
+
+        for (const exercise of exercises) {
+            const movementId = exercise.movementId;
+            if (typeof movementId === "string" && movementId.trim()) {
+                ids.push(movementId.trim());
+            }
+        }
+    }
+
+    return ids;
+};
+
+const buildCalendarFallbackDay = (date: string): CalendarDayFull => {
+    return {
+        date,
+        weekKey: getWeekKeyFromISODate(date),
+        sleep: null,
+        training: null,
+        plannedRoutine: null,
+        plannedMeta: null,
+        notes: null,
+        tags: null,
+        meta: null,
+    };
 };
 
 /**
@@ -140,9 +621,6 @@ export const getStatsInRange = async ({ userId, from, to }: StatsRangeArgs) => {
         .sort({ date: 1 })
         .lean();
 
-    // ------------------
-    // Sleep aggregation
-    // ------------------
     let daysWithSleep = 0;
 
     let sleepTimeSum = 0;
@@ -163,9 +641,6 @@ export const getStatsInRange = async ({ userId, from, to }: StatsRangeArgs) => {
     let deepSum = 0;
     let deepCount = 0;
 
-    // ------------------
-    // Training aggregation
-    // ------------------
     let totalSessions = 0;
     let daysWithTraining = 0;
 
@@ -184,81 +659,78 @@ export const getStatsInRange = async ({ userId, from, to }: StatsRangeArgs) => {
     let maxHrSum = 0;
     let maxHrCount = 0;
 
-    for (const d of days as any[]) {
-        // ---- Sleep ----
-        if (d.sleep) {
+    for (const rawDay of days) {
+        const day = normalizeCalendarDayFull(rawDay);
+
+        if (day.sleep) {
             const hasAnySleepValue =
-                d.sleep.timeAsleepMinutes != null ||
-                d.sleep.score != null ||
-                d.sleep.awakeMinutes != null ||
-                d.sleep.remMinutes != null ||
-                d.sleep.coreMinutes != null ||
-                d.sleep.deepMinutes != null;
+                day.sleep.timeAsleepMinutes != null ||
+                day.sleep.score != null ||
+                day.sleep.awakeMinutes != null ||
+                day.sleep.remMinutes != null ||
+                day.sleep.coreMinutes != null ||
+                day.sleep.deepMinutes != null;
 
             if (hasAnySleepValue) daysWithSleep++;
 
-            if (d.sleep.timeAsleepMinutes != null) {
-                sleepTimeSum += d.sleep.timeAsleepMinutes;
+            if (day.sleep.timeAsleepMinutes != null) {
+                sleepTimeSum += day.sleep.timeAsleepMinutes;
                 sleepTimeCount++;
             }
-            if (d.sleep.score != null) {
-                sleepScoreSum += d.sleep.score;
+            if (day.sleep.score != null) {
+                sleepScoreSum += day.sleep.score;
                 sleepScoreCount++;
             }
-            if (d.sleep.awakeMinutes != null) {
-                awakeSum += d.sleep.awakeMinutes;
+            if (day.sleep.awakeMinutes != null) {
+                awakeSum += day.sleep.awakeMinutes;
                 awakeCount++;
             }
-            if (d.sleep.remMinutes != null) {
-                remSum += d.sleep.remMinutes;
+            if (day.sleep.remMinutes != null) {
+                remSum += day.sleep.remMinutes;
                 remCount++;
             }
-            if (d.sleep.coreMinutes != null) {
-                coreSum += d.sleep.coreMinutes;
+            if (day.sleep.coreMinutes != null) {
+                coreSum += day.sleep.coreMinutes;
                 coreCount++;
             }
-            if (d.sleep.deepMinutes != null) {
-                deepSum += d.sleep.deepMinutes;
+            if (day.sleep.deepMinutes != null) {
+                deepSum += day.sleep.deepMinutes;
                 deepCount++;
             }
         }
 
-        // ---- Training ----
-        const sessions = d.training?.sessions ?? null;
+        const sessions = day.training?.sessions ?? null;
 
-        if (sessions && Array.isArray(sessions) && sessions.length > 0) {
+        if (sessions && sessions.length > 0) {
             daysWithTraining++;
             totalSessions += sessions.length;
 
-            if (d.training?.dayEffortRpe != null) {
-                dayEffortSum += d.training.dayEffortRpe;
+            if (day.training?.dayEffortRpe != null) {
+                dayEffortSum += day.training.dayEffortRpe;
                 dayEffortCount++;
             }
 
-            for (const s of sessions) {
-                if (s.activeKcal != null) {
-                    activeKcalSum += s.activeKcal;
+            for (const session of sessions) {
+                if (session.activeKcal != null) {
+                    activeKcalSum += session.activeKcal;
                     activeKcalCount++;
                 }
-                if (s.distanceKm != null) {
-                    distanceKmSum += s.distanceKm;
+                if (session.distanceKm != null) {
+                    distanceKmSum += session.distanceKm;
                     distanceKmCount++;
                 }
-                if (s.avgHr != null) {
-                    avgHrSum += s.avgHr;
+                if (session.avgHr != null) {
+                    avgHrSum += session.avgHr;
                     avgHrCount++;
                 }
-                if (s.maxHr != null) {
-                    maxHrSum += s.maxHr;
+                if (session.maxHr != null) {
+                    maxHrSum += session.maxHr;
                     maxHrCount++;
                 }
             }
-        } else if (d.training) {
-            // keep dayEffortRpe even if no sessions
-            if (d.training.dayEffortRpe != null) {
-                dayEffortSum += d.training.dayEffortRpe;
-                dayEffortCount++;
-            }
+        } else if (day.training?.dayEffortRpe != null) {
+            dayEffortSum += day.training.dayEffortRpe;
+            dayEffortCount++;
         }
     }
 
@@ -272,19 +744,15 @@ export const getStatsInRange = async ({ userId, from, to }: StatsRangeArgs) => {
             avgRemMinutes: safeAvg(remSum, remCount),
             avgCoreMinutes: safeAvg(coreSum, coreCount),
             avgDeepMinutes: safeAvg(deepSum, deepCount),
-
             daysWithSleep,
         },
 
         training: {
             totalSessions,
             daysWithTraining,
-
             avgDayEffortRpe: safeAvg(dayEffortSum, dayEffortCount),
-
             totalActiveKcal: safeSumOrNull(activeKcalSum, activeKcalCount),
             totalDistanceKm: safeSumOrNull(distanceKmSum, distanceKmCount),
-
             avgAvgHr: safeAvg(avgHrSum, avgHrCount),
             avgMaxHr: safeAvg(maxHrSum, maxHrCount),
         },
@@ -297,7 +765,9 @@ export const getDayByDate = async (userId: string, date: string) => {
         date,
     });
 
-    return day ? day.toJSON() : null;
+    if (!day) return null;
+
+    return day.toJSON();
 };
 
 export const getDaysInRange = async (userId: string, from: string, to: string) => {
@@ -308,7 +778,7 @@ export const getDaysInRange = async (userId: string, from: string, to: string) =
         date: { $gte: from, $lte: to },
     }).sort({ date: 1 });
 
-    return days.map((d) => d.toJSON());
+    return days.map((day) => day.toJSON());
 };
 
 /**
@@ -325,25 +795,6 @@ export const upsertWorkoutDay = async ({
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const weekKey = getWeekKeyFromISODate(date);
 
-    const collectMovementIdsFromPayload = (p: any): string[] => {
-        const ids: string[] = [];
-
-        const sessions = p?.training?.sessions;
-        if (!Array.isArray(sessions)) return ids;
-
-        for (const s of sessions) {
-            const ex = s?.exercises;
-            if (!Array.isArray(ex)) continue;
-
-            for (const e of ex) {
-                const mid = e?.movementId;
-                if (typeof mid === "string" && mid.trim()) ids.push(mid.trim());
-            }
-        }
-
-        return ids;
-    };
-
     const movementIds = collectMovementIdsFromPayload(payload);
     await assertMovementsExist({ userId, movementIds });
 
@@ -359,52 +810,55 @@ export const upsertWorkoutDay = async ({
         }
 
         const base = buildCanonicalDefaults(userObjectId, date);
-        const createDoc: any = { ...base };
 
-        createDoc.sleep = mergeSleepBlock(createDoc.sleep, payload.sleep);
-        createDoc.training = mergeTrainingBlock(createDoc.training, payload.training);
-
-        createDoc.notes = mergeGeneric(createDoc.notes, payload.notes);
-        createDoc.tags = mergeGeneric(createDoc.tags, payload.tags);
-        createDoc.meta = mergeGeneric(createDoc.meta, payload.meta);
-
-        createDoc.weekKey = weekKey;
+        const createDoc: WorkoutDayCreateInput = {
+            ...base,
+            sleep: mergeSleepBlock(base.sleep, payload.sleep),
+            training: mergeTrainingBlock(base.training, payload.training),
+            plannedRoutine: mergePlannedRoutine(base.plannedRoutine, payload.plannedRoutine),
+            plannedMeta: mergePlannedMeta(base.plannedMeta, payload.plannedMeta),
+            notes: mergeNotes(base.notes, payload.notes),
+            tags: mergeTags(base.tags, payload.tags),
+            meta: mergeMeta(base.meta, payload.meta),
+            weekKey,
+        };
 
         const created = await WorkoutDayModel.create(createDoc);
         return created.toJSON();
     }
 
-    // Update existing
     if (mode === "replace") {
         const next = applyFullReplace(userObjectId, date, payload);
 
-        (existing as any).sleep = next.sleep;
-        (existing as any).training = next.training;
-
-        (existing as any).notes = next.notes;
-        (existing as any).tags = next.tags;
-        (existing as any).meta = next.meta;
-
-        (existing as any).weekKey = weekKey;
+        existing.set({
+            sleep: next.sleep,
+            training: next.training,
+            plannedRoutine: next.plannedRoutine,
+            plannedMeta: next.plannedMeta,
+            notes: next.notes,
+            tags: next.tags,
+            meta: next.meta,
+            weekKey,
+        });
 
         const saved = await existing.save();
         return saved.toJSON();
     }
 
-    // merge mode
-    (existing as any).sleep = mergeSleepBlock((existing as any).sleep, payload.sleep);
-    (existing as any).training = mergeTrainingBlock((existing as any).training, payload.training);
-
-    (existing as any).notes = mergeGeneric((existing as any).notes, payload.notes);
-    (existing as any).tags = mergeGeneric((existing as any).tags, payload.tags);
-    (existing as any).meta = mergeGeneric((existing as any).meta, payload.meta);
-
-    (existing as any).weekKey = weekKey;
+    existing.set({
+        sleep: mergeSleepBlock(existing.sleep, payload.sleep),
+        training: mergeTrainingBlock(existing.training, payload.training),
+        plannedRoutine: mergePlannedRoutine(existing.plannedRoutine, payload.plannedRoutine),
+        plannedMeta: mergePlannedMeta(existing.plannedMeta, payload.plannedMeta),
+        notes: mergeNotes(existing.notes, payload.notes),
+        tags: mergeTags(existing.tags, payload.tags),
+        meta: mergeMeta(existing.meta, payload.meta),
+        weekKey,
+    });
 
     const saved = await existing.save();
     return saved.toJSON();
 };
-
 
 /**
  * =========================================================
@@ -418,47 +872,38 @@ export const getCalendarInRange = async (
     to: string,
     fields: string[] | null,
     opts: Omit<BuildOpts, "fields">
-) => {
+): Promise<CalendarRangeResponse> => {
     const docs = await WorkoutDayModel.find({
         userId: new mongoose.Types.ObjectId(userId),
         date: { $gte: from, $lte: to },
     }).sort({ date: 1 });
 
-    const byDate = new Map<string, any>();
+    const byDate = new Map<string, CalendarDayFull>();
+
     for (const doc of docs) {
-        const day = doc.toJSON();
-        byDate.set(day.date, day);
+        const day = normalizeCalendarDayFull(doc.toJSON());
+        if (day.date) {
+            byDate.set(day.date, day);
+        }
     }
 
     const dates = opts.fillMissingDays ? enumerateDays(from, to) : Array.from(byDate.keys()).sort();
-
     const effectiveFields = fields ?? Array.from(DEFAULT_FIELDS_ALL);
 
-    const builtDays = dates.map((date) => {
-        const day =
-            byDate.get(date) ??
-            ({
-                date,
-                weekKey: getWeekKeyFromISODate(date),
-                sleep: null,
-                training: null,
-                plannedRoutine: null,
-                plannedMeta: null,
-                notes: null,
-                tags: null,
-                meta: null,
-            } as any);
+    const builtDays: CalendarDayFull[] = dates.map((date) => {
+        const day = byDate.get(date) ?? buildCalendarFallbackDay(date);
 
         const full = buildCalendarDay(
             day,
-            { ...opts, fields: effectiveFields } as BuildOpts,
+            { ...opts, fields: effectiveFields },
             getWeekKeyFromISODate
         );
 
-        return pickFields(full, effectiveFields);
+        const picked = pickFields(full, effectiveFields);
+        return normalizeCalendarDayFull(picked);
     });
 
-    const response: any = {
+    const response: CalendarRangeResponse = {
         from,
         to,
         fields: effectiveFields,
@@ -467,22 +912,7 @@ export const getCalendarInRange = async (
     };
 
     if (opts.includeRollups) {
-        const rollupDays = dates.map((date) => {
-            return (
-                byDate.get(date) ?? {
-                    date,
-                    weekKey: getWeekKeyFromISODate(date),
-                    sleep: null,
-                    training: null,
-                    plannedRoutine: null,
-                    plannedMeta: null,
-                    notes: null,
-                    tags: null,
-                    meta: null,
-                }
-            );
-        });
-
+        const rollupDays = dates.map((date) => byDate.get(date) ?? buildCalendarFallbackDay(date));
         response.rollups = rollupFromDays(rollupDays, getWeekKeyFromISODate);
     }
 
@@ -507,7 +937,7 @@ export const getWeekViewByKey = async (
 
     const calendar = await getCalendarInRange(userId, range.from, range.to, fields, opts);
 
-    const out: WeekViewResponse = {
+    return {
         weekKey,
         range,
         fields: calendar.fields,
@@ -515,6 +945,4 @@ export const getWeekViewByKey = async (
         days: calendar.days,
         ...(calendar.rollups ? { rollups: calendar.rollups } : {}),
     };
-
-    return out;
 };
