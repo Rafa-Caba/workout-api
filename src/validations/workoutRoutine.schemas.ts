@@ -1,8 +1,11 @@
+// src/validations/workoutRoutine.schemas.ts
+
 import { z } from "zod";
 
 const weekKeySchema = z.string().regex(/^\d{4}-W\d{2}$/, "Invalid weekKey format (expected YYYY-W##)");
 
 const dayKeySchema = z.enum(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+const workoutDataSourceSchema = z.enum(["manual", "healthkit", "health-connect"]);
 
 export const routineWeekParamsSchema = z.object({
     weekKey: weekKeySchema,
@@ -35,13 +38,9 @@ export const routineArchiveQuerySchema = z.object({
 const routineExerciseSchema = z.object({
     id: z.string().min(1),
 
-    // Canonical label
     name: z.string().min(1).max(200),
 
-    // ✅ Link to Movement catalog
     movementId: z.string().min(1).nullable().optional(),
-
-    // ✅ Snapshot (optional, helps history if movement name changes)
     movementName: z.string().max(200).nullable().optional(),
 
     sets: z.number().min(0).max(99).nullable().optional(),
@@ -71,10 +70,8 @@ export const routineUpsertBodySchema = z
         split: z.string().max(200).nullable().optional(),
         plannedDays: z.array(dayKeySchema).nullable().optional(),
 
-        // ✅ Zod v4: record(keyType, valueType)
         meta: z.record(z.string(), z.unknown()).nullable().optional(),
 
-        // Either full days array or single day patch
         days: z.array(routineDaySchema).optional(),
         day: routineDaySchema.optional(),
     })
@@ -139,8 +136,8 @@ const gymCheckExercisePatchSchema = z
 
 const gymCheckMetricsPatchSchema = z
     .object({
-        startAt: z.string().max(60).nullable().optional(), // ISO datetime string
-        endAt: z.string().max(60).nullable().optional(), // ISO datetime string
+        startAt: z.string().max(60).nullable().optional(),
+        endAt: z.string().max(60).nullable().optional(),
 
         activeKcal: z.number().min(0).max(200000).nullable().optional(),
         totalKcal: z.number().min(0).max(200000).nullable().optional(),
@@ -158,6 +155,9 @@ const gymCheckMetricsPatchSchema = z
         effortRpe: z.number().min(0).max(10).nullable().optional(),
 
         trainingSource: z.string().max(120).nullable().optional(),
+        source: workoutDataSourceSchema.nullable().optional(),
+        sourceDevice: z.string().max(200).nullable().optional(),
+
         dayEffortRpe: z.number().min(0).max(10).nullable().optional(),
     })
     .strict();

@@ -1,8 +1,11 @@
+// src/validations/workoutSession.schemas.ts
+
 import { z } from "zod";
 import type {
     CreateExerciseInput,
     CreateTrainingSessionInput,
     PatchTrainingSessionInput,
+    TrainingSessionMeta,
 } from "../types/workoutDay.types";
 import { isoDateSchema } from "./workoutDay.schemas";
 
@@ -38,6 +41,25 @@ const nonNegNum = z.coerce
 
 const nullableString = z.string().nullable();
 const recordUnknownNullable = z.record(z.string(), z.unknown()).nullable();
+
+const trainingSessionMetaSchema = z
+    .object({
+        source: z.enum(["manual", "healthkit", "health-connect"]).nullable().optional(),
+        sourceDevice: z.string().max(200).nullable().optional(),
+        importedAt: z.string().max(60).nullable().optional(),
+        lastSyncedAt: z.string().max(60).nullable().optional(),
+        sessionKind: z.enum(["device-import", "gym-check"]).nullable().optional(),
+    })
+    .strict()
+    .transform(
+        (value): TrainingSessionMeta => ({
+            source: value.source ?? null,
+            sourceDevice: value.sourceDevice ?? null,
+            importedAt: value.importedAt ?? null,
+            lastSyncedAt: value.lastSyncedAt ?? null,
+            sessionKind: value.sessionKind ?? null,
+        })
+    );
 
 const exerciseSetSchema = z
     .object({
@@ -123,7 +145,7 @@ const createSessionBodyBaseSchema = z.object({
     notes: z.string().max(5000).nullable().optional(),
     exercises: z.array(createExerciseSchema).nullable().optional(),
 
-    meta: recordUnknownNullable.optional(),
+    meta: trainingSessionMetaSchema.nullable().optional(),
 });
 
 /**

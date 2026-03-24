@@ -1,14 +1,24 @@
+// src/types/workoutDay.types.ts
+// Core domain types for workout days, sleep tracking, training sessions,
+// planned routines, calendar rollups, upsert payloads, and historical backfill.
+
 export type ISODate = string; // "YYYY-MM-DD"
 export type WeekKey = string; // "YYYY-W##"
 
 export type ResourceType = "image" | "video";
+
+export type WorkoutDataSource = "manual" | "healthkit" | "health-connect";
+
+export type WorkoutSessionKind = "device-import" | "gym-check";
+
+export type WorkoutSourceDevice = string;
 
 export type MediaItem = {
     publicId: string;
     url: string;
     resourceType: ResourceType;
     format: string | null;
-    createdAt: string; // ISO datetime
+    createdAt: string;
     meta: Record<string, unknown> | null;
 };
 
@@ -20,7 +30,12 @@ export type SleepBlock = {
     remMinutes: number | null;
     coreMinutes: number | null;
     deepMinutes: number | null;
-    source: string | null;
+
+    source: WorkoutDataSource | null;
+    sourceDevice: WorkoutSourceDevice | null;
+    importedAt: string | null;
+    lastSyncedAt: string | null;
+
     raw: unknown | null;
 };
 
@@ -28,68 +43,57 @@ export type ExerciseSetUnit = "lb" | "kg";
 
 export type ExerciseSet = {
     setIndex: number;
-
     reps: number | null;
     weight: number | null;
     unit: ExerciseSetUnit;
-
     rpe: number | null;
-
     isWarmup: boolean;
     isDropSet: boolean;
-
     tempo: string | null;
     restSec: number | null;
-
     tags: string[] | null;
     meta: Record<string, unknown> | null;
 };
 
 export type Exercise = {
     id: string;
-
     name: string;
     movementId: string | null;
     movementName: string | null;
-
     notes: string | null;
-
     sets: ExerciseSet[] | null;
-
     meta: Record<string, unknown> | null;
 };
 
 export type CreateExerciseInput = Omit<Exercise, "id">;
 
+export type TrainingSessionMeta = {
+    source: WorkoutDataSource | null;
+    sourceDevice: WorkoutSourceDevice | null;
+    importedAt: string | null;
+    lastSyncedAt: string | null;
+    sessionKind: WorkoutSessionKind | null;
+};
+
 export type TrainingSession = {
     id: string;
     type: string;
-
     startAt: string | null;
     endAt: string | null;
-
     durationSeconds: number | null;
-
     activeKcal: number | null;
     totalKcal: number | null;
-
     avgHr: number | null;
     maxHr: number | null;
-
     distanceKm: number | null;
     steps: number | null;
     elevationGainM: number | null;
-
     paceSecPerKm: number | null;
     cadenceRpm: number | null;
-
     effortRpe: number | null;
-
     notes: string | null;
-    meta: Record<string, unknown> | null;
-
+    meta: TrainingSessionMeta | null;
     media: MediaItem[] | null;
-
     exercises: Exercise[] | null;
 };
 
@@ -104,35 +108,23 @@ export type PatchTrainingSessionInput = Partial<CreateTrainingSessionInput>;
 
 export type TrainingBlock = {
     sessions: TrainingSession[] | null;
-    source: string | null;
+    source: WorkoutDataSource | null;
     dayEffortRpe: number | null;
     raw: unknown | null;
 };
-
-/**
- * =========================================================
- * Planned routine (trainer/template-owned)
- * Mirrors RoutineDay structure (WorkoutRoutineWeek)
- * =========================================================
- */
 
 export type PlannedRoutineSource = "trainer" | "template";
 
 export type PlannedRoutineExercise = {
     id: string;
-
     name: string;
-
     movementId: string | null;
     movementName: string | null;
-
     sets: number | null;
     reps: string | null;
     rpe: number | null;
-
     load: string | null;
     notes: string | null;
-
     attachmentPublicIds: string[] | null;
 };
 
@@ -140,61 +132,42 @@ export type PlannedRoutine = {
     sessionType: string | null;
     focus: string | null;
     exercises: PlannedRoutineExercise[] | null;
-
     notes: string | null;
     tags: string[] | null;
 };
 
 export type PlannedMeta = {
-    plannedBy: string; // User id
-    plannedAt: string; // ISO datetime
+    plannedBy: string;
+    plannedAt: string;
     source: PlannedRoutineSource | null;
 };
-
-/**
- * =========================================================
- * Core WorkoutDay doc
- * =========================================================
- */
 
 export type WorkoutDayDoc = {
     id: string;
     userId: string;
-
     date: ISODate;
     weekKey: WeekKey;
-
     sleep: SleepBlock | null;
-
-    // actual training (trainee-owned)
     training: TrainingBlock | null;
-
-    // planned routine (trainer/template-owned)
     plannedRoutine: PlannedRoutine | null;
     plannedMeta: PlannedMeta | null;
-
     notes: string | null;
     tags: string[] | null;
     meta: Record<string, unknown> | null;
-
     createdAt: string;
     updatedAt: string;
 };
 
 export type CalendarTotals = {
     totalSessions: number;
-
     totalDurationSeconds: number | null;
     totalActiveKcal: number | null;
     totalKcal: number | null;
-
     totalDistanceKm: number | null;
     totalSteps: number | null;
     totalElevationGainM: number | null;
-
     avgHr: number | null;
     maxHr: number | null;
-
     avgPaceSecPerKm: number | null;
     avgCadenceRpm: number | null;
 };
@@ -202,18 +175,14 @@ export type CalendarTotals = {
 export type TrainingTypeTotals = {
     type: string;
     sessions: number;
-
     totalDurationSeconds: number | null;
     totalActiveKcal: number | null;
     totalKcal: number | null;
-
     totalDistanceKm: number | null;
     totalSteps: number | null;
     totalElevationGainM: number | null;
-
     avgHr: number | null;
     maxHr: number | null;
-
     avgPaceSecPerKm: number | null;
     avgCadenceRpm: number | null;
 };
@@ -229,7 +198,7 @@ export type SleepSummary = {
 };
 
 export type TrainingSummary = {
-    source: string | null;
+    source: WorkoutDataSource | null;
     dayEffortRpe: number | null;
     sessionsCount: number;
 };
@@ -237,41 +206,31 @@ export type TrainingSummary = {
 export type CalendarDayFull = {
     date?: ISODate;
     weekKey?: WeekKey;
-
     hasSleep?: boolean;
     hasTraining?: boolean;
     hasPlanned?: boolean;
-
     sleep?: SleepBlock | null;
     training?: TrainingBlock | null;
-
     plannedRoutine?: PlannedRoutine | null;
     plannedMeta?: PlannedMeta | null;
-
     notes?: string | null;
     tags?: string[] | null;
     meta?: Record<string, unknown> | null;
-
     sleepSummary?: SleepSummary | null;
     trainingSummary?: TrainingSummary | null;
-
     trainingTotals?: CalendarTotals;
     trainingTypes?: TrainingTypeTotals[];
 };
 
 export type BuildOpts = {
     fields?: string[] | null;
-
     fillMissingDays: boolean;
     includeRollups: boolean;
-
     includeSleep: boolean;
     includeTraining: boolean;
-
     includeSummaries: boolean;
     includeTotals: boolean;
     includeTypes: boolean;
-
     includeRaw: boolean;
 };
 
@@ -297,16 +256,11 @@ export type WeekRollups = {
 export type WeekViewResponse = {
     weekKey: WeekKey;
     range: WeekRange;
-
     fields: string[] | null;
     fillMissingDays: boolean;
-
     days: CalendarDayFull[];
-
     rollups?: WeekRollups;
 };
-
-// src/types/workoutDay.types.ts
 
 export type StatsRangeArgs = {
     userId: string;
@@ -316,20 +270,6 @@ export type StatsRangeArgs = {
 
 export type UpsertMode = "merge" | "replace";
 
-/**
- * Payload accepted by workout day upsert/update flows.
- *
- * It is intentionally partial because the backend may receive only
- * a subset of the WorkoutDay fields in merge mode.
- *
- * We exclude identity fields that are derived or controlled by the service:
- * - id
- * - userId
- * - date
- * - weekKey
- * - createdAt
- * - updatedAt
- */
 export type WorkoutDayUpsertPayload = Partial<
     Pick<
         WorkoutDayDoc,
@@ -343,9 +283,46 @@ export type WorkoutDayUpsertPayload = Partial<
     >
 >;
 
+export type WorkoutDayUpsertBody = WorkoutDayUpsertPayload;
+
 export type UpsertArgs = {
     userId: string;
     date: ISODate;
     payload: WorkoutDayUpsertPayload;
     mode: UpsertMode;
+};
+
+/**
+ * Historical backfill support
+ * Canonical backend contract for importing many dates at once.
+ */
+export type WorkoutDayBackfillItem = {
+    date: ISODate;
+    payload: WorkoutDayUpsertPayload;
+};
+
+export type WorkoutDayBackfillBody = {
+    mode: UpsertMode;
+    days: WorkoutDayBackfillItem[];
+};
+
+/**
+ * Service/controller flow returns the serialized day shape,
+ * not the raw Mongoose document type.
+ */
+export type WorkoutDaySerialized = WorkoutDayDoc | Record<string, unknown>;
+
+export type WorkoutDayBackfillItemResult = {
+    date: ISODate;
+    ok: boolean;
+    error: string | null;
+    day: WorkoutDaySerialized | null;
+};
+
+export type WorkoutDayBackfillResult = {
+    mode: UpsertMode;
+    total: number;
+    successCount: number;
+    failedCount: number;
+    results: WorkoutDayBackfillItemResult[];
 };

@@ -1,3 +1,5 @@
+// src/routes/workoutRoutine.routes.ts
+
 import { Router } from "express";
 import { requireAuth } from "../middlewares/requireAuth";
 import { validate } from "../middlewares/validate";

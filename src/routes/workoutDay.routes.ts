@@ -1,31 +1,30 @@
+// src/routes/workoutDay.routes.ts
+
 import { Router } from "express";
-import z from "zod";
 import * as workoutDayController from "../controllers/workoutDay.controller";
 import { requireAuth } from "../middlewares/requireAuth";
 import { validate } from "../middlewares/validate";
 import { uploadTrainingMedia } from "../middlewares/cloudinary";
 
 import {
-    dayParamsSchema,
-    sessionParamsSchema,
-    upsertDayQuerySchema,
-    rangeQuerySchema,
-    calendarQuerySchema,
-    weekQuerySchema,
-    mediaUploadQuerySchema,
-    mediaDeleteQuerySchema,
-    upsertDayBodySchema,
-    attachSessionMediaQuerySchema,
     attachSessionMediaBodySchema,
+    attachSessionMediaQuerySchema,
+    backfillDayQuerySchema,
+    backfillRangeBodySchema,
+    calendarQuerySchema,
+    dayParamsSchema,
+    mediaDeleteQuerySchema,
+    mediaUploadQuerySchema,
+    rangeQuerySchema,
+    sessionParamsSchema,
+    statsQuerySchema,
+    upsertDayBodySchema,
+    upsertDayQuerySchema,
+    weekParamsSchema,
+    weekQuerySchema,
 } from "../validations/workoutDay.schemas";
 
 const router = Router();
-
-/**
- * =========================================================
- * Day CRUD
- * =========================================================
- */
 
 router.get("/days/:date", requireAuth, validate("params", dayParamsSchema), workoutDayController.getDay);
 
@@ -39,10 +38,23 @@ router.put(
 );
 
 /**
- * =========================================================
- * Range / Calendar / Week / Stats
- * =========================================================
+ * Historical backfill
  */
+router.post(
+    "/backfill/day/:date",
+    requireAuth,
+    validate("params", dayParamsSchema),
+    validate("query", backfillDayQuerySchema),
+    validate("body", upsertDayBodySchema),
+    workoutDayController.backfillDay
+);
+
+router.post(
+    "/backfill/range",
+    requireAuth,
+    validate("body", backfillRangeBodySchema),
+    workoutDayController.backfillRange
+);
 
 router.get("/days", requireAuth, validate("query", rangeQuerySchema), workoutDayController.getDaysRange);
 
@@ -51,7 +63,7 @@ router.get("/calendar", requireAuth, validate("query", calendarQuerySchema), wor
 router.get(
     "/week/:weekKey",
     requireAuth,
-    validate("params", z.object({ weekKey: z.string() })), // or your existing week params schema
+    validate("params", weekParamsSchema),
     validate("query", weekQuerySchema),
     workoutDayController.getWeek
 );
@@ -59,18 +71,9 @@ router.get(
 router.get(
     "/stats",
     requireAuth,
-    validate("query", calendarQuerySchema.pick({ from: true, to: true })),
+    validate("query", statsQuerySchema),
     workoutDayController.getStats
 );
-
-/**
- * =========================================================
- * Media endpoints
- * =========================================================
- * Accepts:
- *  - single file field: "file"
- *  - multi file field: "files"
- */
 
 router.post(
     "/days/:date/sessions/:sessionId/media",
@@ -91,14 +94,6 @@ router.delete(
     validate("query", mediaDeleteQuerySchema),
     workoutDayController.deleteSessionMedia
 );
-
-/**
- * =========================================================
- * NEW: Attach existing media items to a session (no upload)
- * POST /days/:date/sessions/:sessionId/media/attach?returnMode=day|session
- * body: { items: WorkoutMediaItem[] }
- * =========================================================
- */
 
 router.post(
     "/days/:date/sessions/:sessionId/media/attach",

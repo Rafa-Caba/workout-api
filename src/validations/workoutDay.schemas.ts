@@ -1,3 +1,5 @@
+// src/validations/workoutDay.schemas.ts
+
 import { z } from "zod";
 
 /**
@@ -38,6 +40,9 @@ const nonNegNumFromQuery = numberFromQuery
 const recordUnknown = z.record(z.string(), z.unknown());
 const recordUnknownNullable = recordUnknown.nullable();
 
+const workoutDataSourceSchema = z.enum(["manual", "healthkit", "health-connect"]);
+const workoutSessionKindSchema = z.enum(["device-import", "gym-check"]);
+
 export const dayParamsSchema = z.object({
     date: isoDateSchema,
 });
@@ -52,6 +57,10 @@ export const weekParamsSchema = z.object({
 });
 
 export const upsertDayQuerySchema = z.object({
+    mode: z.enum(["merge", "replace"]).optional(),
+});
+
+export const backfillDayQuerySchema = z.object({
     mode: z.enum(["merge", "replace"]).optional(),
 });
 
@@ -114,10 +123,6 @@ export const mediaDeleteQuerySchema = z.object({
     returnMode: z.enum(["day", "session"]).optional(),
 });
 
-/**
- * NEW: Attach existing media items (no upload)
- * - Mirrors WorkoutMediaItemSchema in WorkoutDay.model
- */
 export const attachSessionMediaQuerySchema = z.object({
     returnMode: z.enum(["day", "session"]).optional(),
 });
@@ -128,7 +133,7 @@ const attachMediaItemSchema = z
         url: z.string().url().max(2000),
         resourceType: z.enum(["image", "video"]),
         format: z.string().max(30).nullable().optional(),
-        createdAt: z.string().min(10).nullable().optional(), // ISO string-ish (we'll normalize in controller if null)
+        createdAt: z.string().min(10).nullable().optional(),
         meta: recordUnknownNullable.optional(),
     })
     .strict();
@@ -142,9 +147,7 @@ export const attachSessionMediaBodySchema = z
 const sleepSchema = z
     .object({
         timeAsleepMinutes: nonNegIntFromQuery.nullable().optional(),
-
         timeInBedMinutes: nonNegIntFromQuery.nullable().optional(),
-
         score: nonNegIntFromQuery
             .refine((n) => n <= 100, "Expected <= 100")
             .nullable()
@@ -155,7 +158,11 @@ const sleepSchema = z
         coreMinutes: nonNegIntFromQuery.nullable().optional(),
         deepMinutes: nonNegIntFromQuery.nullable().optional(),
 
-        source: z.string().nullable().optional(),
+        source: workoutDataSourceSchema.nullable().optional(),
+        sourceDevice: z.string().max(200).nullable().optional(),
+        importedAt: z.string().max(60).nullable().optional(),
+        lastSyncedAt: z.string().max(60).nullable().optional(),
+
         raw: recordUnknownNullable.optional(),
     })
     .strict();
@@ -166,7 +173,7 @@ const mediaItemSchema = z
         url: z.string().url(),
         resourceType: z.enum(["image", "video"]),
         format: z.string().nullable().optional(),
-        createdAt: z.string().nullable().optional(), // ISO string
+        createdAt: z.string().nullable().optional(),
         meta: recordUnknownNullable.optional(),
     })
     .strict();
@@ -180,7 +187,6 @@ const exerciseSetSchema = z
         weight: nonNegNumFromQuery.nullable().optional(),
         unit: setUnitSchema,
         rpe: numberFromQuery.min(0).max(10).nullable().optional(),
-
         isWarmup: z.coerce.boolean().optional(),
         isDropSet: z.coerce.boolean().optional(),
         tempo: z.string().nullable().optional(),
@@ -194,14 +200,11 @@ const exerciseSchema = z
     .object({
         id: z.string().min(1).optional(),
         name: z.string().min(1),
-
         movementId: z.string().nullable().optional(),
-
+        movementName: z.string().nullable().optional(),
         muscleGroup: z.string().nullable().optional(),
         equipment: z.string().nullable().optional(),
-
         notes: z.string().nullable().optional(),
-
         sets: z
             .array(exerciseSetSchema)
             .min(1, "Expected at least 1 set")
@@ -219,8 +222,17 @@ const exerciseSchema = z
                     seen.add(idx);
                 }
             }),
-
         meta: recordUnknownNullable.optional(),
+    })
+    .strict();
+
+const trainingSessionMetaSchema = z
+    .object({
+        source: workoutDataSourceSchema.nullable().optional(),
+        sourceDevice: z.string().max(200).nullable().optional(),
+        importedAt: z.string().max(60).nullable().optional(),
+        lastSyncedAt: z.string().max(60).nullable().optional(),
+        sessionKind: workoutSessionKindSchema.nullable().optional(),
     })
     .strict();
 
@@ -249,11 +261,9 @@ const trainingSessionSchema = z
         effortRpe: numberFromQuery.min(0).max(10).nullable().optional(),
 
         notes: z.string().nullable().optional(),
-        meta: recordUnknownNullable.optional(),
+        meta: trainingSessionMetaSchema.nullable().optional(),
 
         media: z.array(mediaItemSchema).optional(),
-
-        // NEW (Priority 2)
         exercises: z.array(exerciseSchema).optional(),
     })
     .strict();
@@ -261,7 +271,7 @@ const trainingSessionSchema = z
 const trainingSchema = z
     .object({
         sessions: z.array(trainingSessionSchema).nullable().optional(),
-        source: z.string().nullable().optional(),
+        source: workoutDataSourceSchema.nullable().optional(),
         dayEffortRpe: numberFromQuery.min(0).max(10).nullable().optional(),
         raw: recordUnknownNullable.optional(),
     })
@@ -271,8 +281,25 @@ export const upsertDayBodySchema = z
     .object({
         sleep: sleepSchema.nullable().optional(),
         training: trainingSchema.nullable().optional(),
+        plannedRoutine: z.unknown().nullable().optional(),
+        plannedMeta: z.unknown().nullable().optional(),
         notes: z.string().nullable().optional(),
         tags: z.array(z.string()).nullable().optional(),
         meta: recordUnknownNullable.optional(),
+    })
+    .strict();
+
+export const backfillRangeBodySchema = z
+    .object({
+        mode: z.enum(["merge", "replace"]).optional(),
+        days: z
+            .array(
+                z.object({
+                    date: isoDateSchema,
+                    payload: upsertDayBodySchema,
+                })
+            )
+            .min(1, "Expected at least 1 backfill item")
+            .max(366, "Expected at most 366 backfill items"),
     })
     .strict();

@@ -1,31 +1,122 @@
-import type { Request, Response } from "express";
+// src/controllers/workoutDay.controller.ts
+
+import type { Request, RequestHandler, Response } from "express";
 import path from "path";
 import mongoose from "mongoose";
+
 import { WorkoutDayModel } from "../models/WorkoutDay.model";
 import { deleteFromCloudinary } from "../utils/cloudinaryDelete";
 import {
+    backfillWorkoutDayByDate,
+    backfillWorkoutDaysRange,
+    getCalendarInRange,
     getDayByDate,
     getDaysInRange,
     getStatsInRange,
-    getCalendarInRange,
     getWeekViewByKey,
     upsertWorkoutDay,
 } from "../services/workoutDay.service";
 
-/**
- * =========================================================
- * Helpers (controller-local)
- * =========================================================
- */
+import type {
+    BuildOpts,
+    MediaItem,
+    TrainingSession,
+    UpsertArgs,
+    WorkoutDayBackfillBody,
+} from "../types/workoutDay.types";
 
-const getUserIdFromReq = (req: Request): string => String((req as any).user?.id ?? "");
+type AuthUser = {
+    id?: string;
+};
 
-const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
+type WorkoutDayParams = {
+    date?: string;
+    sessionId?: string;
+    weekKey?: string;
+};
+
+type UpsertDayQuery = {
+    mode?: "merge" | "replace";
+};
+
+type RangeQuery = {
+    from?: string;
+    to?: string;
+};
+
+type CalendarLikeQuery = {
+    from?: string;
+    to?: string;
+    fields?: string[] | null;
+    fillMissingDays?: boolean;
+    includeRollups?: boolean;
+    includeSleep?: boolean;
+    includeTraining?: boolean;
+    includeSummaries?: boolean;
+    includeTotals?: boolean;
+    includeTypes?: boolean;
+    includeRaw?: boolean;
+};
+
+type MediaUploadQuery = {
+    returnMode?: "day" | "session";
+};
+
+type MediaDeleteQuery = {
+    publicId?: string;
+    returnMode?: "day" | "session";
+};
+
+type AttachSessionMediaBody = {
+    items?: MediaItem[];
+};
+
+type RequestWithAuth = Request & {
+    user?: AuthUser;
+};
+
+type RequestWithValidatedQuery<TQuery> = RequestWithAuth & {
+    validatedQuery?: TQuery;
+};
+
+type RequestWithValidatedBody<TBody> = RequestWithAuth & {
+    validatedBody?: TBody;
+};
+
+type RequestWithValidated<TBody, TQuery> = RequestWithAuth & {
+    validatedBody?: TBody;
+    validatedQuery?: TQuery;
+};
+
+type MulterFileFieldsMap = Record<string, Express.Multer.File[]>;
+
+type RequestWithMulter = RequestWithAuth & {
+    file?: Express.Multer.File;
+    files?: Express.Multer.File[] | MulterFileFieldsMap;
+};
+
+type SessionLike = {
+    _id?: mongoose.Types.ObjectId | string;
+    id?: string;
+    media?: MediaItem[] | null;
+};
+
+type TrainingLike = {
+    sessions?: SessionLike[] | null;
+};
+
+type DayDocumentLike = {
+    training?: TrainingLike | null;
+    save: () => Promise<{ toJSON: () => unknown }>;
+};
+
+const getUserIdFromReq = (req: RequestWithAuth): string => String(req.user?.id ?? "");
+
+const toObjectId = (id: string): mongoose.Types.ObjectId => new mongoose.Types.ObjectId(id);
 
 const inferResourceType = (mimetype?: string | null): "image" | "video" => {
     const mt = (mimetype ?? "").toLowerCase();
-    if (mt.startsWith("video/")) return "video";
-    return "image";
+    return mt.startsWith("video/") ? "video" : "image";
 };
 
 const inferFormat = (filenameOrOriginal?: string | null): string | null => {
@@ -34,140 +125,183 @@ const inferFormat = (filenameOrOriginal?: string | null): string | null => {
     return ext || null;
 };
 
-const normalizeMulterFiles = (req: Request): Express.Multer.File[] => {
+const isMulterFileArrayMap = (value: unknown): value is MulterFileFieldsMap => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+
+    return Object.values(value).every((entry) => Array.isArray(entry));
+};
+
+const normalizeMulterFiles = (req: RequestWithMulter): Express.Multer.File[] => {
     const out: Express.Multer.File[] = [];
 
-    // single
-    if ((req as any).file) out.push((req as any).file);
+    if (req.file) out.push(req.file);
 
-    // fields() -> object map of arrays
-    const filesAny = (req as any).files;
-    if (filesAny) {
-        if (Array.isArray(filesAny)) {
-            // array() style
-            out.push(...filesAny);
-        } else if (typeof filesAny === "object") {
-            // fields() style: { file?: File[], files?: File[] }
-            for (const arr of Object.values(filesAny) as any[]) {
-                if (Array.isArray(arr)) out.push(...arr);
-            }
+    if (Array.isArray(req.files)) {
+        out.push(...req.files);
+    } else if (isMulterFileArrayMap(req.files)) {
+        for (const group of Object.values(req.files)) {
+            out.push(...group);
         }
     }
 
     return out;
 };
 
-const findSession = (dayDoc: any, sessionId: string) => {
-    const sessions: any[] | null = dayDoc?.training?.sessions ?? null;
-    if (!sessions || !Array.isArray(sessions)) return null;
+const findSession = (dayDoc: DayDocumentLike, sessionId: string): SessionLike | null => {
+    const sessions = dayDoc.training?.sessions ?? null;
+    if (!Array.isArray(sessions)) return null;
 
-    return sessions.find((s: any) => String(s._id) === sessionId || String(s.id) === sessionId) ?? null;
+    return (
+        sessions.find((session) => {
+            const rawId =
+                typeof session.id === "string"
+                    ? session.id
+                    : session._id instanceof mongoose.Types.ObjectId
+                        ? session._id.toString()
+                        : typeof session._id === "string"
+                            ? session._id
+                            : "";
+
+            return rawId === sessionId;
+        }) ?? null
+    );
 };
 
-/**
- * =========================================================
- * Core endpoints
- * =========================================================
- */
+const getCalendarBuildOpts = (query: CalendarLikeQuery): Omit<BuildOpts, "fields"> => {
+    return {
+        fillMissingDays: query.fillMissingDays === true,
+        includeRollups: query.includeRollups === true,
+        includeSleep: query.includeSleep !== undefined ? query.includeSleep === true : true,
+        includeTraining: query.includeTraining !== undefined ? query.includeTraining === true : true,
+        includeSummaries: query.includeSummaries !== undefined ? query.includeSummaries === true : true,
+        includeTotals: query.includeTotals !== undefined ? query.includeTotals === true : true,
+        includeTypes: query.includeTypes !== undefined ? query.includeTypes === true : true,
+        includeRaw: query.includeRaw !== undefined ? query.includeRaw === true : false,
+    };
+};
 
-export const upsertDay = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const date = String(req.params.date);
-    const mode = (req.query.mode as "merge" | "replace") ?? "merge";
-    const payload = req.body as any;
+const isTrainingSession = (value: unknown): value is TrainingSession => {
+    return typeof value === "object" && value !== null && "id" in value;
+};
+
+export const upsertDay: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidated<UpsertArgs["payload"], UpsertDayQuery> & {
+        params: WorkoutDayParams;
+    };
+
+    const userId = getUserIdFromReq(typedReq);
+    const date = String(typedReq.params.date ?? "");
+    const mode: "merge" | "replace" = typedReq.validatedQuery?.mode ?? "merge";
+    const payload = typedReq.validatedBody ?? {};
 
     const updated = await upsertWorkoutDay({ userId, date, payload, mode });
     return res.status(200).json(updated);
 };
 
-export const getDay = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const date = String(req.params.date);
+export const backfillDay: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidated<UpsertArgs["payload"], UpsertDayQuery> & {
+        params: WorkoutDayParams;
+    };
+
+    const userId = getUserIdFromReq(typedReq);
+    const date = String(typedReq.params.date ?? "");
+    const mode: "merge" | "replace" = typedReq.validatedQuery?.mode ?? "merge";
+    const payload = typedReq.validatedBody ?? {};
+
+    const updated = await backfillWorkoutDayByDate({ userId, date, payload, mode });
+    return res.status(200).json(updated);
+};
+
+export const backfillRange: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedBody<WorkoutDayBackfillBody>;
+
+    const userId = getUserIdFromReq(typedReq);
+    const body = typedReq.validatedBody ?? { mode: "merge" as const, days: [] };
+
+    const result = await backfillWorkoutDaysRange(userId, {
+        mode: body.mode ?? "merge",
+        days: body.days ?? [],
+    });
+
+    return res.status(200).json(result);
+};
+
+export const getDay: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithAuth & { params: WorkoutDayParams };
+
+    const userId = getUserIdFromReq(typedReq);
+    const date = String(typedReq.params.date ?? "");
 
     const day = await getDayByDate(userId, date);
     return res.status(200).json(day);
 };
 
-export const getDaysRange = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const from = String(req.query.from);
-    const to = String(req.query.to);
+export const getDaysRange: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<RangeQuery>;
+
+    const userId = getUserIdFromReq(typedReq);
+    const from = String(typedReq.validatedQuery?.from ?? typedReq.query.from ?? "");
+    const to = String(typedReq.validatedQuery?.to ?? typedReq.query.to ?? "");
 
     const days = await getDaysInRange(userId, from, to);
     return res.status(200).json({ from, to, days });
 };
 
-export const getWeek = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
-
-    const q: any = (req as any).validatedQuery ?? req.query;
-    const fields: string[] | null = q.fields ?? null;
-
-    const opts = {
-        fillMissingDays: Boolean(q.fillMissingDays),
-        includeRollups: Boolean(q.includeRollups),
-
-        includeSleep: q.includeSleep !== undefined ? Boolean(q.includeSleep) : true,
-        includeTraining: q.includeTraining !== undefined ? Boolean(q.includeTraining) : true,
-        includeSummaries: q.includeSummaries !== undefined ? Boolean(q.includeSummaries) : true,
-        includeTotals: q.includeTotals !== undefined ? Boolean(q.includeTotals) : true,
-        includeTypes: q.includeTypes !== undefined ? Boolean(q.includeTypes) : true,
-        includeRaw: q.includeRaw !== undefined ? Boolean(q.includeRaw) : false,
+export const getWeek: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<CalendarLikeQuery> & {
+        params: WorkoutDayParams;
     };
+
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
+    const query = typedReq.validatedQuery ?? {};
+
+    const fields = query.fields ?? null;
+    const opts = getCalendarBuildOpts(query);
 
     const data = await getWeekViewByKey(userId, weekKey, fields, opts);
     return res.status(200).json(data);
 };
 
-export const getCalendar = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const from = String(req.query.from);
-    const to = String(req.query.to);
+export const getCalendar: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<CalendarLikeQuery>;
 
-    const q: any = (req as any).validatedQuery ?? req.query;
-    const fields = q.fields ?? null;
+    const userId = getUserIdFromReq(typedReq);
+    const query = typedReq.validatedQuery ?? {};
 
-    const opts = {
-        fillMissingDays: Boolean(q.fillMissingDays),
-        includeRollups: Boolean(q.includeRollups),
-
-        includeSleep: q.includeSleep !== undefined ? Boolean(q.includeSleep) : true,
-        includeTraining: q.includeTraining !== undefined ? Boolean(q.includeTraining) : true,
-        includeSummaries: q.includeSummaries !== undefined ? Boolean(q.includeSummaries) : true,
-        includeTotals: q.includeTotals !== undefined ? Boolean(q.includeTotals) : true,
-        includeTypes: q.includeTypes !== undefined ? Boolean(q.includeTypes) : true,
-        includeRaw: q.includeRaw !== undefined ? Boolean(q.includeRaw) : false,
-    };
+    const from = String(query.from ?? typedReq.query.from ?? "");
+    const to = String(query.to ?? typedReq.query.to ?? "");
+    const fields = query.fields ?? null;
+    const opts = getCalendarBuildOpts(query);
 
     const data = await getCalendarInRange(userId, from, to, fields, opts);
     return res.status(200).json(data);
 };
 
-export const getStats = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const from = String(req.query.from);
-    const to = String(req.query.to);
+export const getStats: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<RangeQuery>;
+
+    const userId = getUserIdFromReq(typedReq);
+    const from = String(typedReq.validatedQuery?.from ?? typedReq.query.from ?? "");
+    const to = String(typedReq.validatedQuery?.to ?? typedReq.query.to ?? "");
 
     const stats = await getStatsInRange({ userId, from, to });
     return res.status(200).json(stats);
 };
 
-/**
- * =========================================================
- * Media endpoints (UPLOAD)
- * =========================================================
- */
+export const addSessionMedia: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<MediaUploadQuery> &
+        RequestWithMulter & { params: WorkoutDayParams };
 
-export const addSessionMedia = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const date = String(req.params.date);
-    const sessionId = String(req.params.sessionId);
+    const userId = getUserIdFromReq(typedReq);
+    const date = String(typedReq.params.date ?? "");
+    const sessionId = String(typedReq.params.sessionId ?? "");
+    const returnMode: "day" | "session" =
+        typedReq.validatedQuery?.returnMode === "session" ? "session" : "day";
 
-    const q: any = (req as any).validatedQuery ?? req.query;
-    const returnMode: "day" | "session" = q?.returnMode === "session" ? "session" : "day";
-
-    const files = normalizeMulterFiles(req);
+    const files = normalizeMulterFiles(typedReq);
 
     if (!files.length) {
         return res.status(400).json({
@@ -179,28 +313,20 @@ export const addSessionMedia = async (req: Request, res: Response) => {
         });
     }
 
-    const mediaItems = files.map((file: any) => {
-        const publicId: string | null = file.filename ? String(file.filename) : null;
-        const url: string | null = file.path ? String(file.path) : null;
+    const mediaItems: MediaItem[] = files.map((file) => ({
+        publicId: String(file.filename ?? ""),
+        url: String(file.path ?? ""),
+        resourceType: inferResourceType(file.mimetype),
+        format: inferFormat(file.originalname ?? file.filename),
+        createdAt: new Date().toISOString(),
+        meta: {
+            originalname: file.originalname ?? null,
+            mimetype: file.mimetype ?? null,
+            bytes: typeof file.size === "number" ? file.size : null,
+        },
+    }));
 
-        const resourceType = inferResourceType(file.mimetype);
-        const format = inferFormat(file.originalname ?? file.filename);
-
-        return {
-            publicId,
-            url,
-            resourceType,
-            format,
-            createdAt: new Date().toISOString(),
-            meta: {
-                originalname: file.originalname ?? null,
-                mimetype: file.mimetype ?? null,
-                bytes: file.size ?? null,
-            },
-        };
-    });
-
-    const missing = mediaItems.find((m) => !m.publicId || !m.url);
+    const missing = mediaItems.find((item) => !item.publicId || !item.url);
     if (missing) {
         return res.status(500).json({
             error: {
@@ -208,39 +334,56 @@ export const addSessionMedia = async (req: Request, res: Response) => {
                 message: "Upload succeeded but file metadata missing (publicId/url).",
                 details: {
                     gotCount: files.length,
-                    missingPublicId: mediaItems.filter((m) => !m.publicId).length,
-                    missingUrl: mediaItems.filter((m) => !m.url).length,
+                    missingPublicId: mediaItems.filter((item) => !item.publicId).length,
+                    missingUrl: mediaItems.filter((item) => !item.url).length,
                 },
             },
         });
     }
 
-    const dayDoc = await WorkoutDayModel.findOne({
+    const dayDoc = (await WorkoutDayModel.findOne({
         userId: toObjectId(userId),
         date,
-    });
+    })) as DayDocumentLike | null;
 
     if (!dayDoc) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Workout day not found", details: { date } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Workout day not found",
+                details: { date },
+            },
         });
     }
 
-    const session = findSession(dayDoc as any, sessionId);
+    const session = findSession(dayDoc, sessionId);
     if (!session) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Training session not found", details: { sessionId } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Training session not found",
+                details: { sessionId },
+            },
         });
     }
 
-    if (!Array.isArray(session.media)) session.media = [];
-    for (const item of mediaItems) session.media.push(item);
+    if (!Array.isArray(session.media)) {
+        session.media = [];
+    }
+
+    session.media.push(...mediaItems);
 
     const saved = await dayDoc.save();
     const outDay = saved.toJSON();
 
     if (returnMode === "session") {
-        const outSession = outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
+        const sessions = (outDay as { training?: { sessions?: unknown[] | null } })?.training?.sessions ?? [];
+        const outSession = Array.isArray(sessions)
+            ? sessions.find(
+                (sessionItem) =>
+                    isTrainingSession(sessionItem) && String(sessionItem.id) === sessionId
+            ) ?? null
+            : null;
 
         return res.status(200).json({
             session: outSession,
@@ -251,15 +394,18 @@ export const addSessionMedia = async (req: Request, res: Response) => {
     return res.status(200).json(outDay);
 };
 
-export const deleteSessionMedia = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const date = String(req.params.date);
-    const sessionId = String(req.params.sessionId);
+export const deleteSessionMedia: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<MediaDeleteQuery> & {
+        params: WorkoutDayParams;
+    };
 
-    const q: any = (req as any).validatedQuery ?? req.query;
-    const publicId = typeof q.publicId === "string" ? q.publicId : null;
+    const userId = getUserIdFromReq(typedReq);
+    const date = String(typedReq.params.date ?? "");
+    const sessionId = String(typedReq.params.sessionId ?? "");
+    const publicId = typedReq.validatedQuery?.publicId ?? null;
 
-    const returnMode: "day" | "session" = q?.returnMode === "session" ? "session" : "day";
+    const returnMode: "day" | "session" =
+        typedReq.validatedQuery?.returnMode === "session" ? "session" : "day";
 
     if (!publicId) {
         return res.status(400).json({
@@ -271,48 +417,70 @@ export const deleteSessionMedia = async (req: Request, res: Response) => {
         });
     }
 
-    const dayDoc = await WorkoutDayModel.findOne({
+    const dayDoc = (await WorkoutDayModel.findOne({
         userId: toObjectId(userId),
         date,
-    });
+    })) as DayDocumentLike | null;
 
     if (!dayDoc) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Workout day not found", details: { date } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Workout day not found",
+                details: { date },
+            },
         });
     }
 
-    const session = findSession(dayDoc as any, sessionId);
+    const session = findSession(dayDoc, sessionId);
     if (!session) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Training session not found", details: { sessionId } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Training session not found",
+                details: { sessionId },
+            },
         });
     }
 
-    const mediaArr: any[] = Array.isArray(session.media) ? session.media : [];
+    const mediaArr = Array.isArray(session.media) ? session.media : [];
     if (mediaArr.length === 0) {
         return res.status(400).json({
-            error: { code: "VALIDATION_ERROR", message: "This session has no media.", details: null },
+            error: {
+                code: "VALIDATION_ERROR",
+                message: "This session has no media.",
+                details: null,
+            },
         });
     }
 
-    const found = mediaArr.find((m: any) => m?.publicId === publicId);
+    const found = mediaArr.find((item) => item.publicId === publicId) ?? null;
     if (!found) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Media not found on this session.", details: { publicId } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Media not found on this session.",
+                details: { publicId },
+            },
         });
     }
 
-    session.media = mediaArr.filter((m: any) => m?.publicId !== publicId);
+    session.media = mediaArr.filter((item) => item.publicId !== publicId);
 
     const saved = await dayDoc.save();
     const outDay = saved.toJSON();
 
-    const rt: "image" | "video" = found?.resourceType === "video" ? "video" : "image";
-    await deleteFromCloudinary(publicId, { resourceType: rt });
+    const resourceType: "image" | "video" = found.resourceType === "video" ? "video" : "image";
+    await deleteFromCloudinary(publicId, { resourceType });
 
     if (returnMode === "session") {
-        const outSession = outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
+        const sessions = (outDay as { training?: { sessions?: unknown[] | null } })?.training?.sessions ?? [];
+        const outSession = Array.isArray(sessions)
+            ? sessions.find(
+                (sessionItem) =>
+                    isTrainingSession(sessionItem) && String(sessionItem.id) === sessionId
+            ) ?? null
+            : null;
 
         return res.status(200).json({
             session: outSession,
@@ -323,76 +491,84 @@ export const deleteSessionMedia = async (req: Request, res: Response) => {
     return res.status(200).json(outDay);
 };
 
-/**
- * =========================================================
- * Media endpoints (ATTACH existing Cloudinary assets)
- * - No upload, no Cloudinary mutation
- * =========================================================
- */
+export const attachSessionMedia: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidated<AttachSessionMediaBody, MediaUploadQuery> & {
+        params: WorkoutDayParams;
+    };
 
-export const attachSessionMedia = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const date = String(req.params.date);
-    const sessionId = String(req.params.sessionId);
+    const userId = getUserIdFromReq(typedReq);
+    const date = String(typedReq.params.date ?? "");
+    const sessionId = String(typedReq.params.sessionId ?? "");
+    const returnMode: "day" | "session" =
+        typedReq.validatedQuery?.returnMode === "session" ? "session" : "day";
 
-    const q: any = (req as any).validatedQuery ?? req.query;
-    const returnMode: "day" | "session" = q?.returnMode === "session" ? "session" : "day";
-
-    // validate() middleware already parsed this
-    const payload: any = (req as any).validatedBody ?? req.body;
-    const items: any[] = Array.isArray(payload?.items) ? payload.items : [];
+    const items = Array.isArray(typedReq.validatedBody?.items) ? typedReq.validatedBody.items : [];
 
     if (!items.length) {
         return res.status(400).json({
-            error: { code: "VALIDATION_ERROR", message: "Expected non-empty body.items array.", details: null },
+            error: {
+                code: "VALIDATION_ERROR",
+                message: "Expected non-empty body.items array.",
+                details: null,
+            },
         });
     }
 
-    const dayDoc = await WorkoutDayModel.findOne({
+    const dayDoc = (await WorkoutDayModel.findOne({
         userId: toObjectId(userId),
         date,
-    });
+    })) as DayDocumentLike | null;
 
     if (!dayDoc) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Workout day not found", details: { date } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Workout day not found",
+                details: { date },
+            },
         });
     }
 
-    const session = findSession(dayDoc as any, sessionId);
+    const session = findSession(dayDoc, sessionId);
     if (!session) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Training session not found", details: { sessionId } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Training session not found",
+                details: { sessionId },
+            },
         });
     }
 
-    if (!Array.isArray(session.media)) session.media = [];
+    if (!Array.isArray(session.media)) {
+        session.media = [];
+    }
 
-    const existingIds = new Set<string>((session.media ?? []).map((m: any) => String(m?.publicId ?? "").trim()).filter(Boolean));
+    const existingIds = new Set(
+        session.media
+            .map((item) => String(item.publicId ?? "").trim())
+            .filter((value) => value.length > 0)
+    );
 
     let attachedCount = 0;
-    for (const raw of items) {
-        const publicId = String(raw?.publicId ?? "").trim();
-        const url = String(raw?.url ?? "").trim();
+
+    for (const item of items) {
+        const publicId = String(item.publicId ?? "").trim();
+        const url = String(item.url ?? "").trim();
 
         if (!publicId || !url) continue;
         if (existingIds.has(publicId)) continue;
 
-        const resourceType: "image" | "video" = raw?.resourceType === "video" ? "video" : "image";
-        const format = raw?.format === null || typeof raw?.format === "string" ? (raw.format ?? null) : null;
-
-        const createdAt =
-            raw?.createdAt === null || typeof raw?.createdAt === "string"
-                ? (raw.createdAt ?? null)
-                : null;
-
         session.media.push({
             publicId,
             url,
-            resourceType,
-            format,
-            createdAt: createdAt && createdAt.trim() ? createdAt : new Date().toISOString(),
-            meta: raw?.meta ?? null,
+            resourceType: item.resourceType === "video" ? "video" : "image",
+            format: item.format ?? null,
+            createdAt:
+                typeof item.createdAt === "string" && item.createdAt.trim().length > 0
+                    ? item.createdAt
+                    : new Date().toISOString(),
+            meta: item.meta ?? null,
         });
 
         existingIds.add(publicId);
@@ -403,7 +579,13 @@ export const attachSessionMedia = async (req: Request, res: Response) => {
     const outDay = saved.toJSON();
 
     if (returnMode === "session") {
-        const outSession = outDay?.training?.sessions?.find((s: any) => String(s?.id) === sessionId) ?? null;
+        const sessions = (outDay as { training?: { sessions?: unknown[] | null } })?.training?.sessions ?? [];
+        const outSession = Array.isArray(sessions)
+            ? sessions.find(
+                (sessionItem) =>
+                    isTrainingSession(sessionItem) && String(sessionItem.id) === sessionId
+            ) ?? null
+            : null;
 
         return res.status(200).json({
             session: outSession,
@@ -412,7 +594,7 @@ export const attachSessionMedia = async (req: Request, res: Response) => {
     }
 
     return res.status(200).json({
-        ...outDay,
+        ...(outDay as Record<string, unknown>),
         _attach: { attachedCount },
     });
 };

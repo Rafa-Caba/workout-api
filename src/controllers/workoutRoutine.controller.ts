@@ -1,176 +1,340 @@
-import type { Request, Response } from "express";
+// src/controllers/workoutRoutine.controller.ts
+
+import type { Request, RequestHandler, Response } from "express";
+
 import {
     addRoutineAttachments,
     deleteRoutineAttachment,
     getRoutineWeek,
     initRoutineWeek,
+    listRoutineWeeks,
+    patchRoutineGymCheckDay,
     setRoutineArchived,
     upsertRoutineWeek,
-    patchRoutineGymCheckDay,
-    patchGymCheckDay,
-    listRoutineWeeks
 } from "../services/workoutRoutine.service";
 
-const getUserIdFromReq = (req: Request): string => String((req as any).user?.id ?? "");
+type AuthUser = {
+    id?: string;
+};
 
-const normalizeMulterFiles = (req: Request): Express.Multer.File[] => {
+type RoutineParams = {
+    weekKey?: string;
+    dayKey?: string;
+};
+
+type RoutineInitQuery = {
+    title?: string;
+    split?: string;
+    unarchive?: boolean;
+};
+
+type RoutineArchiveQuery = {
+    archived?: boolean;
+};
+
+type RoutineListQuery = {
+    status?: "active" | "archived";
+    limit?: number;
+};
+
+type RoutineAttachmentDeleteQuery = {
+    publicId?: string;
+    deleteCloudinary?: boolean;
+};
+
+type DayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
+
+type GymCheckExerciseSet = {
+    setIndex: number;
+    reps: number | null;
+    weight: number | null;
+    unit: "lb" | "kg";
+    rpe: number | null;
+    isWarmup: boolean;
+    isDropSet: boolean;
+    tempo: string | null;
+    restSec: number | null;
+    tags: string[] | null;
+    meta: Record<string, unknown> | null;
+};
+
+type GymCheckExercisePatch = {
+    done?: boolean | null;
+    notes?: string | null;
+    durationMin?: number | null;
+    mediaPublicIds?: string[] | null;
+    performedSets?: GymCheckExerciseSet[] | null;
+};
+
+type GymCheckMetricsPatch = {
+    startAt?: string | null;
+    endAt?: string | null;
+    activeKcal?: number | null;
+    totalKcal?: number | null;
+    avgHr?: number | null;
+    maxHr?: number | null;
+    distanceKm?: number | null;
+    steps?: number | null;
+    elevationGainM?: number | null;
+    paceSecPerKm?: number | null;
+    cadenceRpm?: number | null;
+    effortRpe?: number | null;
+    trainingSource?: string | null;
+    source?: "manual" | "healthkit" | "health-connect" | null;
+    sourceDevice?: string | null;
+    dayEffortRpe?: number | null;
+};
+
+type RoutineGymCheckPatchBody = {
+    durationMin?: number | null;
+    notes?: string | null;
+    metrics?: GymCheckMetricsPatch | null;
+    exercises?: Record<string, GymCheckExercisePatch> | null;
+};
+
+type RoutineExercise = {
+    id: string;
+    name: string;
+    movementId?: string | null;
+    movementName?: string | null;
+    sets?: number | null;
+    reps?: string | null;
+    rpe?: number | null;
+    load?: string | null;
+    notes?: string | null;
+    attachmentPublicIds?: string[] | null;
+};
+
+type RoutineDay = {
+    dayKey: DayKey;
+    date?: string;
+    sessionType?: string | null;
+    focus?: string | null;
+    exercises?: RoutineExercise[] | null;
+    notes?: string | null;
+    tags?: string[] | null;
+};
+
+type RoutineUpsertBody = {
+    title?: string | null;
+    split?: string | null;
+    plannedDays?: DayKey[] | null;
+    meta?: Record<string, unknown> | null;
+    day?: RoutineDay;
+    days?: RoutineDay[];
+};
+
+type RequestWithAuth = Request & {
+    user?: AuthUser;
+};
+
+type RequestWithValidatedQuery<TQuery> = RequestWithAuth & {
+    validatedQuery?: TQuery;
+};
+
+type RequestWithValidatedBody<TBody> = RequestWithAuth & {
+    validatedBody?: TBody;
+};
+
+type MulterFileFieldsMap = Record<string, Express.Multer.File[]>;
+
+type RequestWithMulter = RequestWithAuth & {
+    file?: Express.Multer.File;
+    files?: Express.Multer.File[] | MulterFileFieldsMap;
+};
+
+const getUserIdFromReq = (req: RequestWithAuth): string => String(req.user?.id ?? "");
+
+const isMulterFileArrayMap = (value: unknown): value is MulterFileFieldsMap => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+
+    return Object.values(value).every((entry) => Array.isArray(entry));
+};
+
+const normalizeMulterFiles = (req: RequestWithMulter): Express.Multer.File[] => {
     const out: Express.Multer.File[] = [];
 
-    if ((req as any).file) out.push((req as any).file);
+    if (req.file) {
+        out.push(req.file);
+    }
 
-    const filesAny = (req as any).files;
-    if (filesAny) {
-        if (Array.isArray(filesAny)) out.push(...filesAny);
-        else if (typeof filesAny === "object") {
-            for (const arr of Object.values(filesAny) as any[]) {
-                if (Array.isArray(arr)) out.push(...arr);
-            }
+    if (Array.isArray(req.files)) {
+        out.push(...req.files);
+    } else if (isMulterFileArrayMap(req.files)) {
+        for (const group of Object.values(req.files)) {
+            out.push(...group);
         }
     }
 
     return out;
 };
 
-export const initWeekRoutine = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
-    const q: any = (req as any).validatedQuery ?? req.query;
+const isDayKey = (value: string): value is DayKey => {
+    return (
+        value === "Mon" ||
+        value === "Tue" ||
+        value === "Wed" ||
+        value === "Thu" ||
+        value === "Fri" ||
+        value === "Sat" ||
+        value === "Sun"
+    );
+};
+
+export const initWeekRoutine: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<RoutineInitQuery> & {
+        params: RoutineParams;
+    };
+
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
+    const query = typedReq.validatedQuery ?? {};
 
     const out = await initRoutineWeek(userId, weekKey, {
-        title: q.title,
-        split: q.split,
-        unarchive: q.unarchive,
+        title: query.title,
+        split: query.split,
+        unarchive: query.unarchive,
     });
 
     return res.status(200).json(out);
 };
 
-export const getWeekRoutine = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
+export const getWeekRoutine: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithAuth & { params: RoutineParams };
+
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
 
     const out = await getRoutineWeek(userId, weekKey);
     return res.status(200).json(out);
 };
 
-export const updateWeekRoutine = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
-    const payload = req.body as any;
+export const updateWeekRoutine: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedBody<RoutineUpsertBody> & {
+        params: RoutineParams;
+    };
+
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
+    const payload = typedReq.validatedBody ?? {};
 
     const out = await upsertRoutineWeek(userId, weekKey, payload);
     return res.status(200).json(out);
 };
 
-export const archiveWeekRoutine = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
+export const archiveWeekRoutine: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<RoutineArchiveQuery> & {
+        params: RoutineParams;
+    };
 
-    const q: any = (req as any).validatedQuery ?? req.query;
-    const archived = q.archived !== undefined ? Boolean(q.archived) : true;
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
+    const archived =
+        typedReq.validatedQuery?.archived !== undefined
+            ? typedReq.validatedQuery.archived === true
+            : true;
 
     const out = await setRoutineArchived(userId, weekKey, archived);
     return res.status(200).json(out);
 };
 
-/**
- * =========================================================
- * Gym Check (sync checklist)
- * =========================================================
- */
-export const patchGymCheckForDay = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
-    const dayKey = String(req.params.dayKey);
+export const patchGymCheckForDay: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedBody<RoutineGymCheckPatchBody> & {
+        params: RoutineParams;
+    };
 
-    // validate() middleware already parsed this
-    const payload = (req as any).validatedBody ?? req.body;
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
+    const rawDayKey = String(typedReq.params.dayKey ?? "");
 
-    const out = await patchRoutineGymCheckDay(userId, weekKey, dayKey as any, payload);
+    if (!isDayKey(rawDayKey)) {
+        return res.status(400).json({
+            error: {
+                code: "VALIDATION_ERROR",
+                message: "Invalid dayKey",
+                details: { dayKey: rawDayKey },
+            },
+        });
+    }
+
+    const payload = typedReq.validatedBody ?? {};
+
+    const out = await patchRoutineGymCheckDay(userId, weekKey, rawDayKey, payload);
 
     if (!out) {
         return res.status(404).json({
-            error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } },
+            error: {
+                code: "NOT_FOUND",
+                message: "Routine week not found",
+                details: { weekKey },
+            },
         });
     }
 
     return res.status(200).json(out);
 };
 
-// =========================================================
-// Attachments
-// =========================================================
+export const addWeekRoutineAttachments: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithMulter & { params: RoutineParams };
 
-export const addWeekRoutineAttachments = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
 
-    const files = normalizeMulterFiles(req);
+    const files = normalizeMulterFiles(typedReq);
     const out = await addRoutineAttachments(userId, weekKey, files);
 
     if (!out) {
-        return res
-            .status(404)
-            .json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });
-    }
-
-    if ((out as any).error) {
-        return res.status(400).json(out);
+        return res.status(404).json({
+            error: {
+                code: "NOT_FOUND",
+                message: "Routine week not found",
+                details: { weekKey },
+            },
+        });
     }
 
     return res.status(200).json(out);
 };
 
-export const deleteWeekRoutineAttachment = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
+export const deleteWeekRoutineAttachment: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<RoutineAttachmentDeleteQuery> & {
+        params: RoutineParams;
+    };
 
-    const q: any = (req as any).validatedQuery ?? req.query;
-    const publicId = String(q.publicId);
-    const deleteCloudinary = q.deleteCloudinary !== undefined ? Boolean(q.deleteCloudinary) : true;
+    const userId = getUserIdFromReq(typedReq);
+    const weekKey = String(typedReq.params.weekKey ?? "");
+    const publicId = String(typedReq.validatedQuery?.publicId ?? "");
+    const deleteCloudinary =
+        typedReq.validatedQuery?.deleteCloudinary !== undefined
+            ? typedReq.validatedQuery.deleteCloudinary === true
+            : true;
 
     const out = await deleteRoutineAttachment(userId, weekKey, publicId, deleteCloudinary);
 
     if (!out) {
-        return res
-            .status(404)
-            .json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });
+        return res.status(404).json({
+            error: {
+                code: "NOT_FOUND",
+                message: "Routine week not found",
+                details: { weekKey },
+            },
+        });
     }
 
     return res.status(200).json(out);
 };
 
-export const patchWeekRoutineGymCheckDay = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const weekKey = String(req.params.weekKey);
-    const dayKey = String(req.params.dayKey) as any;
+export const listWeeks: RequestHandler = async (req, res: Response) => {
+    const typedReq = req as RequestWithValidatedQuery<RoutineListQuery>;
 
-    console.log({
-        userId,
-        weekKey,
-        dayKey,
-    });
-
-    const payload = req.body as any;
-
-    const out = await patchGymCheckDay(userId, weekKey, dayKey, payload);
-
-    console.log({ out2: out });
-
-    if (!out) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Routine week not found", details: { weekKey } } });
-    }
-
-    return res.status(200).json(out);
-};
-
-export const listWeeks = async (req: Request, res: Response) => {
-    const userId = getUserIdFromReq(req);
-    const q: any = (req as any).validatedQuery ?? req.query;
+    const userId = getUserIdFromReq(typedReq);
+    const query = typedReq.validatedQuery ?? {};
 
     const out = await listRoutineWeeks(userId, {
-        status: q.status,
-        limit: q.limit,
+        status: query.status,
+        limit: query.limit,
     });
 
     return res.status(200).json(out);

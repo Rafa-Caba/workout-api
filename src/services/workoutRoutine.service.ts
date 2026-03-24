@@ -1,21 +1,33 @@
+// src/services/workoutRoutine.service.ts
+// Service for routine-week CRUD, attachments, and Gym Check patch state.
+// Kept compatible with WorkoutDay automatic minimal sessions by not mutating
+// WorkoutDay directly from Gym Check persistence here.
+
 import { randomUUID } from "crypto";
 import mongoose from "mongoose";
+
 import { WorkoutRoutineWeekModel } from "../models/WorkoutRoutineWeek.model";
-import { assertMovementsExist } from "./movement.service";
 import { MovementModel } from "../models/Movement.model";
-import { GymCheckDayPatch, GymCheckExercisePatch, GymCheckExerciseSet, GymCheckMetricsPatch } from "../types/gymCheck.types"
+import { assertMovementsExist } from "./movement.service";
+
+import type {
+    GymCheckDayPatch,
+    GymCheckExercisePatch,
+    GymCheckExerciseSet,
+    GymCheckMetricsPatch,
+} from "../types/gymCheck.types";
+import type { WorkoutDataSource } from "../types/workoutDay.types";
 
 type DayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
 const DAY_KEYS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-type RoutineExercise = {
-    id: string; // ✅ stable per-exercise id
-    name: string;
+type PlainObject = Record<string, unknown>;
 
-    // ✅ Movement catalog link + snapshot
+type RoutineExercise = {
+    id: string;
+    name: string;
     movementId?: string | null;
     movementName?: string | null;
-
     sets?: number | null;
     reps?: string | null;
     rpe?: number | null;
@@ -26,7 +38,7 @@ type RoutineExercise = {
 
 type RoutineDay = {
     dayKey: DayKey;
-    date?: string; // YYYY-MM-DD
+    date?: string;
     sessionType?: string | null;
     focus?: string | null;
     exercises?: RoutineExercise[] | null;
@@ -39,354 +51,19 @@ type UpsertPayload = {
     split?: string | null;
     plannedDays?: DayKey[] | null;
     meta?: Record<string, unknown> | null;
-
     day?: RoutineDay;
     days?: RoutineDay[];
 };
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-    return typeof v === "object" && v !== null;
-}
-
-function toIsoDate(d: Date): string {
-    const y = d.getUTCFullYear();
-    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(d.getUTCDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-}
-
-function newId(): string {
-    return randomUUID();
-}
-
-function cleanStringOrNull(v: unknown): string | null {
-    if (v === null) return null;
-    if (typeof v !== "string") return null;
-    const s = v.trim();
-    return s.length ? s : null;
-}
-
-function collectMovementIdsFromDays(days?: RoutineDay[] | null): string[] {
-    const out: string[] = [];
-    (days ?? []).forEach((d) => {
-        (d?.exercises ?? []).forEach((e: any) => {
-            const id = cleanStringOrNull(e?.movementId);
-            if (id) out.push(id);
-        });
-    });
-    return out;
-}
-
-async function buildMovementNameMap(args: { userId: string; movementIds: string[] }) {
-    const { userId, movementIds } = args;
-
-    const unique = Array.from(
-        new Set((movementIds ?? []).filter(Boolean).filter((id) => mongoose.Types.ObjectId.isValid(id)))
-    );
-
-    if (unique.length === 0) return new Map<string, string>();
-
-    // ✅ validate first (ensures they belong to this user)
-    await assertMovementsExist({ userId, movementIds: unique });
-
-    const docs = await MovementModel.find({
-        _id: { $in: unique.map((x) => new mongoose.Types.ObjectId(x)) },
-        userId: new mongoose.Types.ObjectId(userId),
-    }).select({ _id: 1, name: 1 });
-
-    const map = new Map<string, string>();
-    docs.forEach((d: any) => map.set(String(d._id), String(d.name ?? "").trim()));
-
-    return map;
-}
-
-/**
- * Normalize one exercise, ensuring stable id.
- * This acts as a migration step for older stored plans without id.
- */
-function normalizeExercise(e: any, movementNameById?: Map<string, string>): RoutineExercise {
-    const id = typeof e?.id === "string" && e.id.trim() ? e.id.trim() : newId();
-
-    const name = String(e?.name ?? "").trim();
-
-    const sets = typeof e?.sets === "number" ? e.sets : e?.sets === null ? null : null;
-    const reps = typeof e?.reps === "string" ? e.reps : e?.reps === null ? null : null;
-    const rpe = typeof e?.rpe === "number" ? e.rpe : e?.rpe === null ? null : null;
-
-    const load = typeof e?.load === "string" ? e.load : e?.load === null ? null : null;
-    const notes = typeof e?.notes === "string" ? e.notes : e?.notes === null ? null : null;
-
-    const attachmentPublicIds = Array.isArray(e?.attachmentPublicIds)
-        ? e.attachmentPublicIds.map((x: any) => String(x).trim()).filter(Boolean)
-        : e?.attachmentPublicIds === null
-            ? null
-            : null;
-
-    const movementId = cleanStringOrNull(e?.movementId);
-
-    // ✅ Snapshot movement name from DB whenever possible
-    const dbName = movementId ? (movementNameById?.get(movementId) ?? null) : null;
-
-    // If FE provides movementName, we still prefer DB snapshot to avoid spoofing/drift
-    const movementName = dbName ?? cleanStringOrNull(e?.movementName) ?? (movementId ? (name || null) : null);
-
-    return {
-        id,
-        name,
-        movementId,
-        movementName,
-        sets,
-        reps,
-        rpe,
-        load,
-        notes,
-        attachmentPublicIds,
-    };
-}
-
-/**
- * WeekKey format: YYYY-W##
- * Compute ISO week Monday as "from", Sunday as "to".
- */
-function weekKeyToRange(weekKey: string): { from: string; to: string } {
-    const m = /^(\d{4})-W(\d{2})$/.exec(weekKey);
-    if (!m) throw new Error(`Invalid weekKey: ${weekKey}`);
-    const year = Number(m[1]);
-    const week = Number(m[2]);
-
-    const jan4 = new Date(Date.UTC(year, 0, 4));
-    const jan4Day = jan4.getUTCDay() || 7; // Mon=1..Sun=7
-    const mondayWeek1 = new Date(jan4);
-    mondayWeek1.setUTCDate(jan4.getUTCDate() - (jan4Day - 1));
-
-    const monday = new Date(mondayWeek1);
-    monday.setUTCDate(mondayWeek1.getUTCDate() + (week - 1) * 7);
-
-    const sunday = new Date(monday);
-    sunday.setUTCDate(monday.getUTCDate() + 6);
-
-    return { from: toIsoDate(monday), to: toIsoDate(sunday) };
-}
-
-function ensure7Days(
-    weekKey: string,
-    incoming?: RoutineDay[] | null,
-    movementNameById?: Map<string, string>
-): Array<{
-    dayKey: DayKey;
-    date: string;
-    sessionType: string | null;
-    focus: string | null;
-    exercises: RoutineExercise[] | null;
-    notes: string | null;
-    tags: string[] | null;
-}> {
-    const { from } = weekKeyToRange(weekKey);
-    const start = new Date(`${from}T00:00:00.000Z`);
-
-    const map = new Map<DayKey, RoutineDay>();
-    (incoming ?? []).forEach((d) => {
-        if (d && DAY_KEYS.includes(d.dayKey)) map.set(d.dayKey, d);
-    });
-
-    return DAY_KEYS.map((dayKey, idx) => {
-        const baseDate = new Date(start);
-        baseDate.setUTCDate(start.getUTCDate() + idx);
-
-        const raw = map.get(dayKey);
-
-        const date =
-            typeof raw?.date === "string" && raw.date.trim()
-                ? raw.date.trim()
-                : toIsoDate(baseDate);
-
-        const exercises =
-            Array.isArray(raw?.exercises) && raw.exercises.length > 0
-                ? raw.exercises.map((e: any) => normalizeExercise(e, movementNameById))
-                : raw?.exercises === null
-                    ? null
-                    : null;
-
-        return {
-            dayKey,
-            date,
-            sessionType:
-                typeof raw?.sessionType === "string"
-                    ? raw.sessionType
-                    : raw?.sessionType === null
-                        ? null
-                        : null,
-            focus:
-                typeof raw?.focus === "string"
-                    ? raw.focus
-                    : raw?.focus === null
-                        ? null
-                        : null,
-            exercises,
-            notes:
-                typeof raw?.notes === "string"
-                    ? raw.notes
-                    : raw?.notes === null
-                        ? null
-                        : null,
-            tags: Array.isArray(raw?.tags)
-                ? raw.tags.map((x) => String(x)).filter(Boolean)
-                : raw?.tags === null
-                    ? null
-                    : null,
-        };
-    });
-}
-
-// =========================================================
-// Public service API used by controller
-// =========================================================
-
-export async function getRoutineWeek(userId: string, weekKey: string) {
-    // ✅ IMPORTANT: do NOT use .lean() here, or `id` will be missing.
-    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
-    return doc ? doc.toJSON() : null;
-}
-
-export async function initRoutineWeek(
-    userId: string,
-    weekKey: string,
-    opts?: { title?: string; split?: string; unarchive?: boolean }
-) {
-    const existing = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
-
-    if (existing) {
-        let changed = false;
-
-        if (existing.status === "archived" && opts?.unarchive) {
-            existing.status = "active";
-            changed = true;
-        }
-        if (typeof opts?.title === "string" && opts.title !== existing.title) {
-            existing.title = opts.title;
-            changed = true;
-        }
-        if (typeof opts?.split === "string" && opts.split !== existing.split) {
-            existing.split = opts.split;
-            changed = true;
-        }
-
-        // snapshot movementName for whatever exists in DB already
-        const existingMovementIds = collectMovementIdsFromDays(existing.days as any);
-        const movementNameById = await buildMovementNameMap({ userId, movementIds: existingMovementIds });
-
-        // enforce 7 full-shape days even for older routines
-        const normalizedDays = ensure7Days(weekKey, existing.days as any, movementNameById);
-        const before = JSON.stringify(existing.days ?? []);
-        const after = JSON.stringify(normalizedDays);
-        if (before !== after) {
-            existing.days = normalizedDays as any;
-            changed = true;
-        }
-
-        if (changed) await existing.save();
-        return existing.toJSON();
-    }
-
-    const range = weekKeyToRange(weekKey);
-    const days = ensure7Days(weekKey, null);
-
-    const created = await WorkoutRoutineWeekModel.create({
-        userId,
-        weekKey,
-        range,
-        status: "active",
-        title: typeof opts?.title === "string" ? opts.title : null,
-        split: typeof opts?.split === "string" ? opts.split : null,
-        plannedDays: null,
-        attachments: [],
-        days,
-        meta: null,
-    });
-
-    return created.toJSON();
-}
-
-export async function setRoutineArchived(userId: string, weekKey: string, archived: boolean) {
-    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
-    if (!doc) return null;
-
-    doc.status = archived ? "archived" : "active";
-    await doc.save();
-    return doc.toJSON();
-}
-
-export async function upsertRoutineWeek(userId: string, weekKey: string, payload: UpsertPayload) {
-    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
-    if (!doc) return null;
-
-    if ("title" in payload) doc.title = payload.title ?? null;
-    if ("split" in payload) doc.split = payload.split ?? null;
-    if ("plannedDays" in payload) doc.plannedDays = payload.plannedDays ?? null;
-    if ("meta" in payload) doc.meta = payload.meta ?? null;
-
-    if (Array.isArray(payload.days)) {
-        const movementIds = collectMovementIdsFromDays(payload.days);
-        const movementNameById = await buildMovementNameMap({ userId, movementIds });
-
-        doc.days = ensure7Days(weekKey, payload.days, movementNameById) as any;
-    } else if (payload.day && isRecord(payload.day) && DAY_KEYS.includes(payload.day.dayKey as any)) {
-        const current = Array.isArray(doc.days) ? (doc.days as any[]) : [];
-
-        // If exercises are provided in this patch, build a map just for them (optional)
-        let patchMovementNameById: Map<string, string> | undefined = undefined;
-        if ("exercises" in payload.day && Array.isArray(payload.day.exercises)) {
-            const movementIds = (payload.day.exercises ?? [])
-                .map((e: any) => cleanStringOrNull(e?.movementId))
-                .filter(Boolean) as string[];
-
-            patchMovementNameById = await buildMovementNameMap({ userId, movementIds });
-        }
-
-        const merged = current.map((d: any) => {
-            if (d?.dayKey !== payload.day!.dayKey) return d;
-
-            const date =
-                typeof payload.day!.date === "string" && payload.day!.date.trim()
-                    ? payload.day!.date.trim()
-                    : d.date;
-
-            let nextExercises = d.exercises;
-            if ("exercises" in payload.day!) {
-                if (Array.isArray(payload.day!.exercises)) {
-                    nextExercises = payload.day!.exercises.map((e: any) =>
-                        normalizeExercise(e, patchMovementNameById)
-                    );
-                } else {
-                    nextExercises = payload.day!.exercises ?? null;
-                }
-            }
-
-            return {
-                ...d,
-                date,
-                sessionType: "sessionType" in payload.day! ? (payload.day!.sessionType ?? null) : d.sessionType,
-                focus: "focus" in payload.day! ? (payload.day!.focus ?? null) : d.focus,
-                exercises: nextExercises,
-                notes: "notes" in payload.day! ? (payload.day!.notes ?? null) : d.notes,
-                tags: "tags" in payload.day! ? (payload.day!.tags ?? null) : d.tags,
-            };
-        });
-
-        // Re-snapshot for the whole merged week (and validate all movementIds)
-        const mergedMovementIds = collectMovementIdsFromDays(merged as any);
-        const mergedMovementNameById = await buildMovementNameMap({ userId, movementIds: mergedMovementIds });
-
-        doc.days = ensure7Days(weekKey, merged as any, mergedMovementNameById) as any;
-    }
-
-    await doc.save();
-    return doc.toJSON();
-}
-
-// =========================================================
-// Attachments (week-level)
-// =========================================================
+type RoutineAttachment = {
+    publicId: string;
+    url: string;
+    resourceType: "image" | "video";
+    format: string | null;
+    createdAt: string;
+    meta: Record<string, unknown> | null;
+    originalName?: string | null;
+};
 
 type CloudinaryLike = {
     publicId: string;
@@ -396,132 +73,6 @@ type CloudinaryLike = {
     createdAt: string;
     originalName: string | null;
 };
-
-function inferResourceTypeFromMimetype(mimetype?: string): "image" | "video" {
-    const mt = (mimetype ?? "").toLowerCase();
-    if (mt.startsWith("video/")) return "video";
-    return "image";
-}
-
-function inferFormatFromOriginalName(originalName?: string): string | null {
-    const n = (originalName ?? "").trim().toLowerCase();
-    const m = /\.([a-z0-9]{2,6})(\?.*)?$/.exec(n);
-    return m ? m[1] : null;
-}
-
-function extractCloudinaryInfo(file: Express.Multer.File): CloudinaryLike | null {
-    const anyFile: any = file as any;
-
-    const publicId =
-        anyFile.filename ??
-        anyFile.public_id ??
-        anyFile.publicId ??
-        anyFile.cloudinary?.public_id ??
-        anyFile.cloudinary?.publicId;
-
-    const url =
-        anyFile.path ??
-        anyFile.secure_url ??
-        anyFile.url ??
-        anyFile.cloudinary?.secure_url ??
-        anyFile.cloudinary?.url;
-
-    const resourceTypeRaw =
-        anyFile.resource_type ??
-        anyFile.resourceType ??
-        anyFile.cloudinary?.resource_type ??
-        anyFile.cloudinary?.resourceType;
-
-    const resourceType: "image" | "video" =
-        resourceTypeRaw === "video" || resourceTypeRaw === "image"
-            ? resourceTypeRaw
-            : inferResourceTypeFromMimetype(anyFile.mimetype);
-
-    const format =
-        (typeof anyFile.format === "string" && anyFile.format) ||
-        (typeof anyFile.cloudinary?.format === "string" && anyFile.cloudinary.format) ||
-        inferFormatFromOriginalName(anyFile.originalname);
-
-    const createdAt =
-        anyFile.created_at ??
-        anyFile.createdAt ??
-        anyFile.cloudinary?.created_at ??
-        anyFile.cloudinary?.createdAt ??
-        new Date().toISOString();
-
-    if (!publicId || !url) return null;
-
-    return {
-        publicId: String(publicId),
-        url: String(url),
-        resourceType,
-        format: format ? String(format) : null,
-        createdAt: String(createdAt),
-        originalName: anyFile.originalname ? String(anyFile.originalname) : null,
-    };
-}
-
-export async function addRoutineAttachments(userId: string, weekKey: string, files: Express.Multer.File[]) {
-    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
-    if (!doc) return null;
-
-    const next = (doc.attachments ?? []).slice();
-
-    for (const f of files) {
-        const info = extractCloudinaryInfo(f);
-        if (!info) continue;
-
-        const exists = next.some((a: any) => a?.publicId === info.publicId);
-        if (exists) continue;
-
-        next.push({
-            publicId: info.publicId,
-            url: info.url,
-            resourceType: info.resourceType,
-            format: info.format,
-            createdAt: info.createdAt,
-            meta: null,
-            originalName: info.originalName,
-        } as any);
-    }
-
-    doc.attachments = next as any;
-    await doc.save();
-    return doc.toJSON();
-}
-
-export async function deleteRoutineAttachment(
-    userId: string,
-    weekKey: string,
-    publicId: string,
-    _deleteCloudinary: boolean
-) {
-    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
-    if (!doc) return null;
-
-    doc.attachments = (doc.attachments ?? []).filter((a: any) => a?.publicId !== publicId) as any;
-
-    doc.days = (doc.days ?? []).map((d: any) => {
-        if (!Array.isArray(d?.exercises)) return d;
-        const exercises = d.exercises.map((e: any) => {
-            if (!Array.isArray(e?.attachmentPublicIds)) return e;
-            return {
-                ...e,
-                attachmentPublicIds: e.attachmentPublicIds.filter((x: any) => x !== publicId),
-            };
-        });
-        return { ...d, exercises };
-    }) as any;
-
-    await doc.save();
-    return doc.toJSON();
-}
-
-// =========================================================
-// Gym Check (sync checklist + day metrics) - persisted in RoutineWeek.meta.gymCheck
-// =========================================================
-
-type PlainObject = Record<string, unknown>;
 
 type StoredGymCheckExercise = {
     done?: boolean | null;
@@ -552,6 +103,9 @@ type StoredGymCheckMetrics = {
     effortRpe?: number | null;
 
     trainingSource?: string | null;
+    source?: WorkoutDataSource | null;
+    sourceDevice?: string | null;
+
     dayEffortRpe?: number | null;
 };
 
@@ -565,123 +119,387 @@ type StoredGymCheckDay = {
 
 type StoredGymCheckMap = Partial<Record<DayKey, StoredGymCheckDay>>;
 
-function isPlainObject(v: unknown): v is PlainObject {
-    return typeof v === "object" && v !== null && !Array.isArray(v);
-}
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+    return typeof value === "object" && value !== null;
+};
 
-function cleanIsoOrNull(v: unknown): string | null {
-    return cleanStringOrNull(v);
-}
+const isPlainObject = (value: unknown): value is PlainObject => {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+};
 
-function cleanNumberOrNull(v: unknown): number | null {
-    if (v === null) return null;
-    if (typeof v !== "number") return null;
-    return Number.isFinite(v) ? v : null;
-}
+const isDayKey = (value: unknown): value is DayKey => {
+    return (
+        value === "Mon" ||
+        value === "Tue" ||
+        value === "Wed" ||
+        value === "Thu" ||
+        value === "Fri" ||
+        value === "Sat" ||
+        value === "Sun"
+    );
+};
 
-function cleanBooleanOrNull(v: unknown): boolean | null | undefined {
-    if (typeof v === "boolean") return v;
-    if (v === null) return null;
+const toIsoDate = (value: Date): string => {
+    const y = value.getUTCFullYear();
+    const m = String(value.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(value.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+};
+
+const newId = (): string => {
+    return randomUUID();
+};
+
+const cleanStringOrNull = (value: unknown): string | null => {
+    if (value === null) return null;
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+};
+
+const cleanNumberOrNull = (value: unknown): number | null => {
+    if (value === null) return null;
+    if (typeof value !== "number") return null;
+    return Number.isFinite(value) ? value : null;
+};
+
+const cleanBooleanOrNull = (value: unknown): boolean | null | undefined => {
+    if (typeof value === "boolean") return value;
+    if (value === null) return null;
     return undefined;
-}
+};
 
-function cleanStringArrayOrNull(v: unknown): string[] | null {
-    if (v === null) return null;
-    if (!Array.isArray(v)) return null;
+const cleanIsoOrNull = (value: unknown): string | null => {
+    return cleanStringOrNull(value);
+};
 
-    const out = v.map((x) => String(x).trim()).filter(Boolean);
-    return out.length ? out : null;
-}
+const cleanStringArrayOrNull = (value: unknown): string[] | null => {
+    if (value === null) return null;
+    if (!Array.isArray(value)) return null;
 
-function normalizeGymCheckExerciseSet(
+    const out = value
+        .map((item) => (typeof item === "string" ? item.trim() : String(item).trim()))
+        .filter((item) => item.length > 0);
+
+    return out.length > 0 ? out : null;
+};
+
+const toNullableWorkoutDataSource = (value: unknown): WorkoutDataSource | null => {
+    return value === "manual" || value === "healthkit" || value === "health-connect"
+        ? value
+        : null;
+};
+
+const normalizeUnknownRoutineExercise = (
     value: unknown,
-    fallbackIndex: number
-): GymCheckExerciseSet | null {
+    movementNameById?: Map<string, string>
+): RoutineExercise | null => {
     if (!isPlainObject(value)) return null;
 
-    const setIndexRaw = value.setIndex;
-    const repsRaw = value.reps;
-    const weightRaw = value.weight;
-    const unitRaw = value.unit;
-    const rpeRaw = value.rpe;
-    const isWarmupRaw = value.isWarmup;
-    const isDropSetRaw = value.isDropSet;
-    const tempoRaw = value.tempo;
-    const restSecRaw = value.restSec;
-    const tagsRaw = value.tags;
-    const metaRaw = value.meta;
+    const providedId = cleanStringOrNull(value.id);
+    const id = providedId ?? newId();
+
+    const name = cleanStringOrNull(value.name);
+    if (!name) return null;
+
+    const movementId = cleanStringOrNull(value.movementId);
+    const dbName = movementId ? movementNameById?.get(movementId) ?? null : null;
+    const fallbackMovementName = cleanStringOrNull(value.movementName);
+    const movementName = dbName ?? fallbackMovementName ?? (movementId ? name : null);
+
+    return {
+        id,
+        name,
+        movementId,
+        movementName,
+        sets: cleanNumberOrNull(value.sets),
+        reps: cleanStringOrNull(value.reps),
+        rpe: cleanNumberOrNull(value.rpe),
+        load: cleanStringOrNull(value.load),
+        notes: cleanStringOrNull(value.notes),
+        attachmentPublicIds: cleanStringArrayOrNull(value.attachmentPublicIds),
+    };
+};
+
+const normalizeUnknownRoutineDay = (value: unknown): RoutineDay | null => {
+    if (!isPlainObject(value)) return null;
+    if (!isDayKey(value.dayKey)) return null;
+
+    const exercises = Array.isArray(value.exercises)
+        ? value.exercises
+            .map((item) => normalizeUnknownRoutineExercise(item))
+            .filter((item): item is RoutineExercise => item !== null)
+        : value.exercises === null
+            ? null
+            : null;
+
+    return {
+        dayKey: value.dayKey,
+        date: cleanStringOrNull(value.date) ?? undefined,
+        sessionType: cleanStringOrNull(value.sessionType),
+        focus: cleanStringOrNull(value.focus),
+        exercises,
+        notes: cleanStringOrNull(value.notes),
+        tags: cleanStringArrayOrNull(value.tags),
+    };
+};
+
+const normalizeRoutineAttachment = (value: unknown): RoutineAttachment | null => {
+    if (!isPlainObject(value)) return null;
+
+    const publicId = cleanStringOrNull(value.publicId);
+    const url = cleanStringOrNull(value.url);
+
+    if (!publicId || !url) return null;
+
+    return {
+        publicId,
+        url,
+        resourceType: value.resourceType === "video" ? "video" : "image",
+        format: cleanStringOrNull(value.format),
+        createdAt: cleanStringOrNull(value.createdAt) ?? new Date().toISOString(),
+        meta: isPlainObject(value.meta) ? value.meta : null,
+        originalName: cleanStringOrNull(value.originalName),
+    };
+};
+
+const collectMovementIdsFromDays = (days?: RoutineDay[] | null): string[] => {
+    const out: string[] = [];
+
+    for (const day of days ?? []) {
+        for (const exercise of day.exercises ?? []) {
+            const movementId = cleanStringOrNull(exercise.movementId);
+            if (movementId) {
+                out.push(movementId);
+            }
+        }
+    }
+
+    return out;
+};
+
+const buildMovementNameMap = async (args: {
+    userId: string;
+    movementIds: string[];
+}): Promise<Map<string, string>> => {
+    const { userId, movementIds } = args;
+
+    const unique = Array.from(
+        new Set(
+            movementIds
+                .filter((id) => typeof id === "string" && id.trim().length > 0)
+                .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        )
+    );
+
+    if (unique.length === 0) {
+        return new Map<string, string>();
+    }
+
+    await assertMovementsExist({ userId, movementIds: unique });
+
+    const docs = await MovementModel.find({
+        _id: { $in: unique.map((id) => new mongoose.Types.ObjectId(id)) },
+        userId: new mongoose.Types.ObjectId(userId),
+    })
+        .select({ _id: 1, name: 1 })
+        .lean();
+
+    const map = new Map<string, string>();
+
+    for (const doc of docs) {
+        if (!isPlainObject(doc)) continue;
+
+        const id = cleanStringOrNull(doc._id?.toString?.());
+        const name = cleanStringOrNull(doc.name);
+
+        if (id && name) {
+            map.set(id, name);
+        }
+    }
+
+    return map;
+};
+
+const weekKeyToRange = (weekKey: string): { from: string; to: string } => {
+    const match = /^(\d{4})-W(\d{2})$/.exec(weekKey);
+    if (!match) {
+        throw new Error(`Invalid weekKey: ${weekKey}`);
+    }
+
+    const year = Number(match[1]);
+    const week = Number(match[2]);
+
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const jan4Day = jan4.getUTCDay() || 7;
+
+    const mondayWeek1 = new Date(jan4);
+    mondayWeek1.setUTCDate(jan4.getUTCDate() - (jan4Day - 1));
+
+    const monday = new Date(mondayWeek1);
+    monday.setUTCDate(mondayWeek1.getUTCDate() + (week - 1) * 7);
+
+    const sunday = new Date(monday);
+    sunday.setUTCDate(monday.getUTCDate() + 6);
+
+    return { from: toIsoDate(monday), to: toIsoDate(sunday) };
+};
+
+const ensure7Days = (
+    weekKey: string,
+    incoming?: RoutineDay[] | null,
+    movementNameById?: Map<string, string>
+): Array<{
+    dayKey: DayKey;
+    date: string;
+    sessionType: string | null;
+    focus: string | null;
+    exercises: RoutineExercise[] | null;
+    notes: string | null;
+    tags: string[] | null;
+}> => {
+    const { from } = weekKeyToRange(weekKey);
+    const start = new Date(`${from}T00:00:00.000Z`);
+
+    const byDayKey = new Map<DayKey, RoutineDay>();
+    for (const day of incoming ?? []) {
+        if (day && isDayKey(day.dayKey)) {
+            byDayKey.set(day.dayKey, day);
+        }
+    }
+
+    return DAY_KEYS.map((dayKey, index) => {
+        const baseDate = new Date(start);
+        baseDate.setUTCDate(start.getUTCDate() + index);
+
+        const raw = byDayKey.get(dayKey);
+        const normalizedExercises =
+            Array.isArray(raw?.exercises) && raw.exercises.length > 0
+                ? raw.exercises
+                    .map((exercise) =>
+                        normalizeUnknownRoutineExercise(exercise, movementNameById)
+                    )
+                    .filter((exercise): exercise is RoutineExercise => exercise !== null)
+                : raw?.exercises === null
+                    ? null
+                    : null;
+
+        return {
+            dayKey,
+            date:
+                typeof raw?.date === "string" && raw.date.trim().length > 0
+                    ? raw.date.trim()
+                    : toIsoDate(baseDate),
+            sessionType: raw?.sessionType ?? null,
+            focus: raw?.focus ?? null,
+            exercises: normalizedExercises,
+            notes: raw?.notes ?? null,
+            tags: raw?.tags ?? null,
+        };
+    });
+};
+
+const inferResourceTypeFromMimetype = (mimetype?: string): "image" | "video" => {
+    const lower = (mimetype ?? "").toLowerCase();
+    return lower.startsWith("video/") ? "video" : "image";
+};
+
+const inferFormatFromOriginalName = (originalName?: string): string | null => {
+    const normalized = (originalName ?? "").trim().toLowerCase();
+    const match = /\.([a-z0-9]{2,6})(\?.*)?$/.exec(normalized);
+    return match ? match[1] : null;
+};
+
+const extractCloudinaryInfo = (file: Express.Multer.File): CloudinaryLike | null => {
+    const candidate = file as unknown as Record<string, unknown>;
+
+    const publicId =
+        cleanStringOrNull(candidate.filename) ??
+        cleanStringOrNull(candidate.public_id) ??
+        cleanStringOrNull(candidate.publicId);
+
+    const pathUrl =
+        cleanStringOrNull(candidate.path) ??
+        cleanStringOrNull(candidate.secure_url) ??
+        cleanStringOrNull(candidate.url);
+
+    const resourceTypeRaw =
+        cleanStringOrNull(candidate.resource_type) ??
+        cleanStringOrNull(candidate.resourceType);
+
+    const format =
+        cleanStringOrNull(candidate.format) ??
+        inferFormatFromOriginalName(file.originalname);
+
+    const createdAt =
+        cleanStringOrNull(candidate.created_at) ??
+        cleanStringOrNull(candidate.createdAt) ??
+        new Date().toISOString();
+
+    if (!publicId || !pathUrl) {
+        return null;
+    }
+
+    return {
+        publicId,
+        url: pathUrl,
+        resourceType:
+            resourceTypeRaw === "video" || resourceTypeRaw === "image"
+                ? resourceTypeRaw
+                : inferResourceTypeFromMimetype(file.mimetype),
+        format,
+        createdAt,
+        originalName: cleanStringOrNull(file.originalname),
+    };
+};
+
+const normalizeGymCheckExerciseSet = (
+    value: unknown,
+    fallbackIndex: number
+): GymCheckExerciseSet | null => {
+    if (!isPlainObject(value)) return null;
 
     const setIndex =
-        typeof setIndexRaw === "number" && Number.isFinite(setIndexRaw) && setIndexRaw > 0
-            ? Math.trunc(setIndexRaw)
+        typeof value.setIndex === "number" && Number.isFinite(value.setIndex) && value.setIndex > 0
+            ? Math.trunc(value.setIndex)
             : fallbackIndex;
-
-    const reps =
-        repsRaw === null
-            ? null
-            : typeof repsRaw === "number" && Number.isFinite(repsRaw)
-                ? Math.trunc(repsRaw)
-                : null;
-
-    const weight =
-        weightRaw === null
-            ? null
-            : typeof weightRaw === "number" && Number.isFinite(weightRaw)
-                ? weightRaw
-                : null;
-
-    const unit: "lb" | "kg" = unitRaw === "kg" ? "kg" : "lb";
-
-    const rpe =
-        rpeRaw === null
-            ? null
-            : typeof rpeRaw === "number" && Number.isFinite(rpeRaw)
-                ? rpeRaw
-                : null;
-
-    const isWarmup = isWarmupRaw === true;
-    const isDropSet = isDropSetRaw === true;
-
-    const tempo =
-        tempoRaw === null
-            ? null
-            : cleanStringOrNull(tempoRaw);
-
-    const restSec =
-        restSecRaw === null
-            ? null
-            : typeof restSecRaw === "number" && Number.isFinite(restSecRaw)
-                ? Math.trunc(restSecRaw)
-                : null;
-
-    const tags =
-        tagsRaw === null
-            ? null
-            : cleanStringArrayOrNull(tagsRaw);
-
-    const meta =
-        metaRaw === null
-            ? null
-            : isPlainObject(metaRaw)
-                ? metaRaw
-                : null;
 
     return {
         setIndex,
-        reps,
-        weight,
-        unit,
-        rpe,
-        isWarmup,
-        isDropSet,
-        tempo,
-        restSec,
-        tags,
-        meta,
+        reps:
+            value.reps === null
+                ? null
+                : typeof value.reps === "number" && Number.isFinite(value.reps)
+                    ? Math.trunc(value.reps)
+                    : null,
+        weight:
+            value.weight === null
+                ? null
+                : typeof value.weight === "number" && Number.isFinite(value.weight)
+                    ? value.weight
+                    : null,
+        unit: value.unit === "kg" ? "kg" : "lb",
+        rpe:
+            value.rpe === null
+                ? null
+                : typeof value.rpe === "number" && Number.isFinite(value.rpe)
+                    ? value.rpe
+                    : null,
+        isWarmup: value.isWarmup === true,
+        isDropSet: value.isDropSet === true,
+        tempo: value.tempo === null ? null : cleanStringOrNull(value.tempo),
+        restSec:
+            value.restSec === null
+                ? null
+                : typeof value.restSec === "number" && Number.isFinite(value.restSec)
+                    ? Math.trunc(value.restSec)
+                    : null,
+        tags: value.tags === null ? null : cleanStringArrayOrNull(value.tags),
+        meta: value.meta === null ? null : isPlainObject(value.meta) ? value.meta : null,
     };
-}
+};
 
-function normalizeGymCheckExerciseSets(input: unknown): GymCheckExerciseSet[] | null {
+const normalizeGymCheckExerciseSets = (input: unknown): GymCheckExerciseSet[] | null => {
     if (input === null) return null;
     if (!Array.isArray(input)) return null;
 
@@ -698,12 +516,12 @@ function normalizeGymCheckExerciseSets(input: unknown): GymCheckExerciseSet[] | 
     });
 
     return normalized.length > 0 ? normalized : null;
-}
+};
 
-function mergeGymCheckExercise(
+const mergeGymCheckExercise = (
     prev: StoredGymCheckExercise | null,
     patch: GymCheckExercisePatch
-): StoredGymCheckExercise {
+): StoredGymCheckExercise => {
     const base: StoredGymCheckExercise = { ...(prev ?? {}) };
 
     if ("done" in patch) base.done = patch.done ?? null;
@@ -711,11 +529,12 @@ function mergeGymCheckExercise(
     if ("durationMin" in patch) base.durationMin = patch.durationMin ?? null;
     if ("mediaPublicIds" in patch) base.mediaPublicIds = patch.mediaPublicIds ?? null;
     if ("performedSets" in patch) base.performedSets = patch.performedSets ?? null;
+    base.updatedAt = new Date().toISOString();
 
     return base;
-}
+};
 
-function normalizeGymCheckMetricsPatch(payload: unknown): GymCheckMetricsPatch {
+const normalizeGymCheckMetricsPatch = (payload: unknown): GymCheckMetricsPatch => {
     if (!isPlainObject(payload)) return {};
 
     const out: GymCheckMetricsPatch = {};
@@ -739,40 +558,29 @@ function normalizeGymCheckMetricsPatch(payload: unknown): GymCheckMetricsPatch {
     if ("effortRpe" in payload) out.effortRpe = cleanNumberOrNull(payload.effortRpe);
 
     if ("trainingSource" in payload) out.trainingSource = cleanStringOrNull(payload.trainingSource);
+    if ("source" in payload) out.source = toNullableWorkoutDataSource(payload.source);
+    if ("sourceDevice" in payload) out.sourceDevice = cleanStringOrNull(payload.sourceDevice);
+
     if ("dayEffortRpe" in payload) out.dayEffortRpe = cleanNumberOrNull(payload.dayEffortRpe);
 
     return out;
-}
+};
 
-function normalizeGymCheckExercisePatch(payload: unknown): GymCheckExercisePatch | null {
+const normalizeGymCheckExercisePatch = (payload: unknown): GymCheckExercisePatch | null => {
     if (!isPlainObject(payload)) return null;
 
     const out: GymCheckExercisePatch = {};
 
-    if ("done" in payload) {
-        out.done = cleanBooleanOrNull(payload.done);
-    }
-
-    if ("notes" in payload) {
-        out.notes = cleanStringOrNull(payload.notes);
-    }
-
-    if ("durationMin" in payload) {
-        out.durationMin = cleanNumberOrNull(payload.durationMin);
-    }
-
-    if ("mediaPublicIds" in payload) {
-        out.mediaPublicIds = cleanStringArrayOrNull(payload.mediaPublicIds);
-    }
-
-    if ("performedSets" in payload) {
-        out.performedSets = normalizeGymCheckExerciseSets(payload.performedSets);
-    }
+    if ("done" in payload) out.done = cleanBooleanOrNull(payload.done);
+    if ("notes" in payload) out.notes = cleanStringOrNull(payload.notes);
+    if ("durationMin" in payload) out.durationMin = cleanNumberOrNull(payload.durationMin);
+    if ("mediaPublicIds" in payload) out.mediaPublicIds = cleanStringArrayOrNull(payload.mediaPublicIds);
+    if ("performedSets" in payload) out.performedSets = normalizeGymCheckExerciseSets(payload.performedSets);
 
     return out;
-}
+};
 
-function normalizeGymCheckDayPatch(payload: unknown): GymCheckDayPatch {
+const normalizeGymCheckDayPatch = (payload: unknown): GymCheckDayPatch => {
     if (!isPlainObject(payload)) return {};
 
     const out: GymCheckDayPatch = {};
@@ -782,6 +590,7 @@ function normalizeGymCheckDayPatch(payload: unknown): GymCheckDayPatch {
 
     if ("metrics" in payload) {
         const rawMetrics = payload.metrics;
+
         if (rawMetrics === null) {
             out.metrics = null;
         } else if (isPlainObject(rawMetrics)) {
@@ -822,7 +631,284 @@ function normalizeGymCheckDayPatch(payload: unknown): GymCheckDayPatch {
     }
 
     return out;
+};
+
+// =========================================================
+// Public service API used by controller
+// =========================================================
+
+export async function getRoutineWeek(userId: string, weekKey: string) {
+    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+    return doc ? doc.toJSON() : null;
 }
+
+export async function initRoutineWeek(
+    userId: string,
+    weekKey: string,
+    opts?: { title?: string; split?: string; unarchive?: boolean }
+) {
+    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+
+    if (doc) {
+        let changed = false;
+
+        if (doc.status === "archived" && opts?.unarchive) {
+            doc.status = "active";
+            changed = true;
+        }
+        if (typeof opts?.title === "string" && opts.title !== doc.title) {
+            doc.title = opts.title;
+            changed = true;
+        }
+        if (typeof opts?.split === "string" && opts.split !== doc.split) {
+            doc.split = opts.split;
+            changed = true;
+        }
+
+        const existingDays = Array.from(doc.days ?? [])
+            .map((day) => normalizeUnknownRoutineDay(day))
+            .filter((day): day is RoutineDay => day !== null);
+
+        const existingMovementIds = collectMovementIdsFromDays(existingDays);
+        const movementNameById = await buildMovementNameMap({
+            userId,
+            movementIds: existingMovementIds,
+        });
+
+        const normalizedDays = ensure7Days(weekKey, existingDays, movementNameById);
+
+        const before = JSON.stringify(existingDays);
+        const after = JSON.stringify(normalizedDays);
+
+        if (before !== after) {
+            doc.set("days", normalizedDays);
+            changed = true;
+        }
+
+        if (changed) {
+            await doc.save();
+        }
+
+        return doc.toJSON();
+    }
+
+    const range = weekKeyToRange(weekKey);
+    const days = ensure7Days(weekKey, null);
+
+    const created = await WorkoutRoutineWeekModel.create({
+        userId,
+        weekKey,
+        range,
+        status: "active",
+        title: typeof opts?.title === "string" ? opts.title : null,
+        split: typeof opts?.split === "string" ? opts.split : null,
+        plannedDays: null,
+        attachments: [],
+        days,
+        meta: null,
+    });
+
+    return created.toJSON();
+}
+
+export async function setRoutineArchived(userId: string, weekKey: string, archived: boolean) {
+    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+    if (!doc) return null;
+
+    doc.status = archived ? "archived" : "active";
+    await doc.save();
+
+    return doc.toJSON();
+}
+
+export async function upsertRoutineWeek(userId: string, weekKey: string, payload: UpsertPayload) {
+    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+    if (!doc) return null;
+
+    if ("title" in payload) doc.title = payload.title ?? null;
+    if ("split" in payload) doc.split = payload.split ?? null;
+    if ("plannedDays" in payload) doc.plannedDays = payload.plannedDays ?? null;
+    if ("meta" in payload) doc.meta = payload.meta ?? null;
+
+    if (Array.isArray(payload.days)) {
+        const normalizedDays = payload.days
+            .map((day) => normalizeUnknownRoutineDay(day))
+            .filter((day): day is RoutineDay => day !== null);
+
+        const movementIds = collectMovementIdsFromDays(normalizedDays);
+        const movementNameById = await buildMovementNameMap({ userId, movementIds });
+
+        doc.set("days", ensure7Days(weekKey, normalizedDays, movementNameById));
+    } else if (payload.day && isRecord(payload.day) && isDayKey(payload.day.dayKey)) {
+        const currentDays = Array.from(doc.days ?? [])
+            .map((day) => normalizeUnknownRoutineDay(day))
+            .filter((day): day is RoutineDay => day !== null);
+
+        let patchMovementNameById: Map<string, string> | undefined;
+
+        if ("exercises" in payload.day && Array.isArray(payload.day.exercises)) {
+            const normalizedPatchExercises = payload.day.exercises
+                .map((exercise) => normalizeUnknownRoutineExercise(exercise))
+                .filter((exercise): exercise is RoutineExercise => exercise !== null);
+
+            const movementIds = normalizedPatchExercises
+                .map((exercise) => cleanStringOrNull(exercise.movementId))
+                .filter((id): id is string => id !== null);
+
+            patchMovementNameById = await buildMovementNameMap({ userId, movementIds });
+        }
+
+        const mergedDays: RoutineDay[] = currentDays.map((day) => {
+            if (day.dayKey !== payload.day?.dayKey) {
+                return day;
+            }
+
+            let nextExercises = day.exercises ?? null;
+
+            if ("exercises" in payload.day) {
+                if (Array.isArray(payload.day.exercises)) {
+                    nextExercises = payload.day.exercises
+                        .map((exercise) =>
+                            normalizeUnknownRoutineExercise(exercise, patchMovementNameById)
+                        )
+                        .filter((exercise): exercise is RoutineExercise => exercise !== null);
+                } else {
+                    nextExercises = payload.day.exercises ?? null;
+                }
+            }
+
+            return {
+                ...day,
+                date:
+                    typeof payload.day.date === "string" && payload.day.date.trim().length > 0
+                        ? payload.day.date.trim()
+                        : day.date,
+                sessionType:
+                    "sessionType" in payload.day
+                        ? payload.day.sessionType ?? null
+                        : day.sessionType,
+                focus: "focus" in payload.day ? payload.day.focus ?? null : day.focus,
+                exercises: nextExercises,
+                notes: "notes" in payload.day ? payload.day.notes ?? null : day.notes,
+                tags: "tags" in payload.day ? payload.day.tags ?? null : day.tags,
+            };
+        });
+
+        const mergedMovementIds = collectMovementIdsFromDays(mergedDays);
+        const mergedMovementNameById = await buildMovementNameMap({
+            userId,
+            movementIds: mergedMovementIds,
+        });
+
+        doc.set("days", ensure7Days(weekKey, mergedDays, mergedMovementNameById));
+    }
+
+    await doc.save();
+    return doc.toJSON();
+}
+
+// =========================================================
+// Attachments (week-level)
+// =========================================================
+
+export async function addRoutineAttachments(
+    userId: string,
+    weekKey: string,
+    files: Express.Multer.File[]
+) {
+    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+    if (!doc) return null;
+
+    const existingAttachments = Array.from(doc.attachments ?? [])
+        .map((attachment) => normalizeRoutineAttachment(attachment))
+        .filter((attachment): attachment is RoutineAttachment => attachment !== null);
+
+    const next: RoutineAttachment[] = [...existingAttachments];
+
+    for (const file of files) {
+        const info = extractCloudinaryInfo(file);
+        if (!info) continue;
+
+        const exists = next.some((attachment) => attachment.publicId === info.publicId);
+        if (exists) continue;
+
+        next.push({
+            publicId: info.publicId,
+            url: info.url,
+            resourceType: info.resourceType,
+            format: info.format,
+            createdAt: info.createdAt,
+            meta: null,
+            originalName: info.originalName,
+        });
+    }
+
+    doc.set("attachments", next);
+    await doc.save();
+
+    return doc.toJSON();
+}
+
+export async function deleteRoutineAttachment(
+    userId: string,
+    weekKey: string,
+    publicId: string,
+    _deleteCloudinary: boolean
+) {
+    const doc = await WorkoutRoutineWeekModel.findOne({ userId, weekKey });
+    if (!doc) return null;
+
+    const currentAttachments = Array.from(doc.attachments ?? [])
+        .map((attachment) => normalizeRoutineAttachment(attachment))
+        .filter((attachment): attachment is RoutineAttachment => attachment !== null);
+
+    const nextAttachments = currentAttachments.filter(
+        (attachment) => attachment.publicId !== publicId
+    );
+
+    const currentDays = Array.from(doc.days ?? []);
+
+    const nextDays = currentDays.map((day) => {
+        const normalizedDay = normalizeUnknownRoutineDay(day);
+        if (!normalizedDay || !Array.isArray(normalizedDay.exercises)) {
+            return normalizedDay;
+        }
+
+        return {
+            ...normalizedDay,
+            exercises: normalizedDay.exercises.map((exercise) => ({
+                ...exercise,
+                attachmentPublicIds:
+                    exercise.attachmentPublicIds?.filter((item) => item !== publicId) ?? null,
+            })),
+        };
+    });
+
+    doc.set("attachments", nextAttachments);
+    doc.set(
+        "days",
+        nextDays.filter(
+            (
+                day
+            ): day is {
+                dayKey: DayKey;
+                date?: string;
+                sessionType?: string | null;
+                focus?: string | null;
+                exercises?: RoutineExercise[] | null;
+                notes?: string | null;
+                tags?: string[] | null;
+            } => day !== null
+        )
+    );
+
+    await doc.save();
+    return doc.toJSON();
+}
+
+// =========================================================
+// Gym Check (sync checklist + day metrics) - persisted in RoutineWeek.meta.gymCheck
+// =========================================================
 
 export async function patchGymCheckDay(
     userId: string,
@@ -836,21 +922,36 @@ export async function patchGymCheckDay(
     const patch = normalizeGymCheckDayPatch(payload);
 
     const currentMeta = isPlainObject(doc.meta) ? doc.meta : {};
-    const currentGymCheck = isPlainObject(currentMeta.gymCheck) ? (currentMeta.gymCheck as StoredGymCheckMap) : {};
+    const currentGymCheck = isPlainObject(currentMeta.gymCheck)
+        ? (currentMeta.gymCheck as StoredGymCheckMap)
+        : {};
 
-    const prevDay = isPlainObject(currentGymCheck[dayKey]) ? (currentGymCheck[dayKey] as StoredGymCheckDay) : {};
-    const nextDay: StoredGymCheckDay = { ...prevDay };
+    const previousDay = isPlainObject(currentGymCheck[dayKey])
+        ? (currentGymCheck[dayKey] as StoredGymCheckDay)
+        : {};
 
-    if ("durationMin" in patch) nextDay.durationMin = patch.durationMin ?? null;
-    if ("notes" in patch) nextDay.notes = patch.notes ?? null;
+    const nextDay: StoredGymCheckDay = { ...previousDay };
+
+    if ("durationMin" in patch) {
+        nextDay.durationMin = patch.durationMin ?? null;
+    }
+
+    if ("notes" in patch) {
+        nextDay.notes = patch.notes ?? null;
+    }
 
     if ("metrics" in patch) {
         if (patch.metrics === null) {
             nextDay.metrics = null;
         } else if (patch.metrics) {
-            const prevMetrics: StoredGymCheckMetrics =
-                isPlainObject(prevDay.metrics) ? { ...(prevDay.metrics as StoredGymCheckMetrics) } : {};
-            nextDay.metrics = { ...prevMetrics, ...patch.metrics };
+            const previousMetrics: StoredGymCheckMetrics = isPlainObject(previousDay.metrics)
+                ? { ...(previousDay.metrics as StoredGymCheckMetrics) }
+                : {};
+
+            nextDay.metrics = {
+                ...previousMetrics,
+                ...patch.metrics,
+            };
         }
     }
 
@@ -858,19 +959,31 @@ export async function patchGymCheckDay(
         if (patch.exercises === null) {
             nextDay.exercises = null;
         } else if (patch.exercises) {
-            const prevExercises: Record<string, StoredGymCheckExercise> =
-                isPlainObject(prevDay.exercises) ? { ...(prevDay.exercises as Record<string, StoredGymCheckExercise>) } : {};
+            const previousExercises: Record<string, StoredGymCheckExercise> =
+                isPlainObject(previousDay.exercises)
+                    ? { ...(previousDay.exercises as Record<string, StoredGymCheckExercise>) }
+                    : {};
 
-            const nextExercises: Record<string, StoredGymCheckExercise> = { ...prevExercises };
+            const nextExercises: Record<string, StoredGymCheckExercise> = {
+                ...previousExercises,
+            };
 
-            for (const [exerciseId, exPatch] of Object.entries(patch.exercises)) {
-                const prevEx = isPlainObject(prevExercises[exerciseId]) ? prevExercises[exerciseId] : null;
-                nextExercises[exerciseId] = mergeGymCheckExercise(prevEx, exPatch);
+            for (const [exerciseId, exercisePatch] of Object.entries(patch.exercises)) {
+                const previousExercise = isPlainObject(previousExercises[exerciseId])
+                    ? previousExercises[exerciseId]
+                    : null;
+
+                nextExercises[exerciseId] = mergeGymCheckExercise(
+                    previousExercise,
+                    exercisePatch
+                );
             }
 
             nextDay.exercises = nextExercises;
         }
     }
+
+    nextDay.updatedAt = new Date().toISOString();
 
     const nextGymCheck: StoredGymCheckMap = {
         ...currentGymCheck,
@@ -895,28 +1008,50 @@ export async function patchRoutineGymCheckDay(
     return patchGymCheckDay(userId, weekKey, dayKey, payload);
 }
 
-export async function listRoutineWeeks(userId: string, opts?: { status?: "active" | "archived"; limit?: number }) {
-    const filter: any = { userId };
-    if (opts?.status) filter.status = opts.status;
+export async function listRoutineWeeks(
+    userId: string,
+    opts?: { status?: "active" | "archived"; limit?: number }
+) {
+    const filter: Record<string, unknown> = { userId };
+
+    if (opts?.status) {
+        filter.status = opts.status;
+    }
 
     const limit = typeof opts?.limit === "number" ? opts.limit : 20;
 
-    // Return lightweight summaries (no heavy days/attachments)
     const docs = await WorkoutRoutineWeekModel.find(filter)
-        .sort({ "range.from": -1 }) // newest week first
+        .sort({ "range.from": -1 })
         .limit(limit)
         .select("weekKey range status title split plannedDays createdAt updatedAt")
         .lean();
 
-    return docs.map((d: any) => ({
-        id: String(d._id),
-        weekKey: d.weekKey,
-        range: d.range,
-        status: d.status,
-        title: d.title ?? null,
-        split: d.split ?? null,
-        plannedDays: d.plannedDays ?? null,
-        createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : undefined,
-        updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : undefined,
+    return docs.map((doc) => ({
+        id: doc._id?.toString?.() ?? "",
+        weekKey: cleanStringOrNull(doc.weekKey) ?? "",
+        range: isPlainObject(doc.range)
+            ? {
+                from: cleanStringOrNull(doc.range.from) ?? "",
+                to: cleanStringOrNull(doc.range.to) ?? "",
+            }
+            : { from: "", to: "" },
+        status: doc.status === "archived" ? "archived" : "active",
+        title: cleanStringOrNull(doc.title),
+        split: cleanStringOrNull(doc.split),
+        plannedDays: Array.isArray(doc.plannedDays)
+            ? doc.plannedDays.filter((item): item is DayKey => isDayKey(item))
+            : null,
+        createdAt:
+            doc.createdAt instanceof Date
+                ? doc.createdAt.toISOString()
+                : typeof doc.createdAt === "string"
+                    ? new Date(doc.createdAt).toISOString()
+                    : undefined,
+        updatedAt:
+            doc.updatedAt instanceof Date
+                ? doc.updatedAt.toISOString()
+                : typeof doc.updatedAt === "string"
+                    ? new Date(doc.updatedAt).toISOString()
+                    : undefined,
     }));
 }

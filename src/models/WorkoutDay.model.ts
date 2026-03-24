@@ -1,3 +1,5 @@
+// src/models/WorkoutDay.model.ts
+
 import mongoose, { Schema, type InferSchemaType, type Model } from "mongoose";
 
 type PlannedRoutineValidatorContext = {
@@ -8,6 +10,35 @@ type PlannedRoutineValidatorContext = {
     | null;
     isNew: boolean;
     isModified(path: string): boolean;
+};
+
+type JsonObject = Record<string, unknown>;
+
+type JsonWorkoutExercise = JsonObject & {
+    _id?: unknown;
+};
+
+type JsonWorkoutSession = JsonObject & {
+    _id?: unknown;
+    exercises?: unknown;
+};
+
+type JsonTrainingBlock = JsonObject & {
+    sessions?: unknown;
+};
+
+type JsonPlannedMeta = JsonObject & {
+    plannedBy?: unknown;
+};
+
+type JsonTransformRet = JsonObject & {
+    _id?: unknown;
+    __v?: unknown;
+    userId?: unknown;
+    training?: JsonTrainingBlock | null;
+    plannedMeta?: JsonPlannedMeta | null;
+    createdAt?: string | Date;
+    updatedAt?: string | Date;
 };
 
 const WorkoutMediaItemSchema = new Schema(
@@ -65,6 +96,25 @@ const WorkoutExerciseSchema = new Schema(
     { _id: true }
 );
 
+const WorkoutSessionMetaSchema = new Schema(
+    {
+        source: {
+            type: String,
+            default: null,
+            enum: ["manual", "healthkit", "health-connect"],
+        },
+        sourceDevice: { type: String, default: null, trim: true, maxlength: 200 },
+        importedAt: { type: String, default: null },
+        lastSyncedAt: { type: String, default: null },
+        sessionKind: {
+            type: String,
+            default: null,
+            enum: ["device-import", "gym-check"],
+        },
+    },
+    { _id: false, strict: false }
+);
+
 const WorkoutSessionSchema = new Schema(
     {
         type: { type: String, required: true, trim: true, maxlength: 120 },
@@ -93,7 +143,7 @@ const WorkoutSessionSchema = new Schema(
         media: { type: [WorkoutMediaItemSchema], default: null },
         exercises: { type: [WorkoutExerciseSchema], default: null },
 
-        meta: { type: Schema.Types.Mixed, default: null },
+        meta: { type: WorkoutSessionMetaSchema, default: null },
     },
     { _id: true }
 );
@@ -122,6 +172,10 @@ const SleepBlockSchema = new Schema(
         deepMinutes: { type: Number, default: null, min: 0 },
 
         source: { type: String, default: null, maxlength: 120 },
+        sourceDevice: { type: String, default: null, trim: true, maxlength: 200 },
+        importedAt: { type: String, default: null },
+        lastSyncedAt: { type: String, default: null },
+
         raw: { type: Schema.Types.Mixed, default: null },
     },
     { _id: false }
@@ -169,6 +223,45 @@ const PlannedMetaSchema = new Schema(
     { _id: false }
 );
 
+function toIsoString(value: unknown): string | undefined {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+
+    if (typeof value === "string") {
+        return new Date(value).toISOString();
+    }
+
+    return undefined;
+}
+
+function mapExerciseForJson(exercise: JsonWorkoutExercise): JsonObject {
+    const { _id, ...exerciseRest } = exercise;
+
+    return {
+        id: _id !== undefined ? String(_id) : "",
+        ...exerciseRest,
+    };
+}
+
+function mapSessionForJson(session: JsonWorkoutSession): JsonObject {
+    const { _id, exercises, ...sessionRest } = session;
+
+    const mappedExercises = Array.isArray(exercises)
+        ? exercises.map((exercise) => mapExerciseForJson(exercise as JsonWorkoutExercise))
+        : exercises ?? null;
+
+    return {
+        id: _id !== undefined ? String(_id) : "",
+        ...sessionRest,
+        exercises: mappedExercises,
+    };
+}
+
 const WorkoutDaySchema = new Schema(
     {
         userId: {
@@ -188,14 +281,17 @@ const WorkoutDaySchema = new Schema(
             type: PlannedRoutineSchema,
             default: null,
             validate: {
-                validator: function (this: PlannedRoutineValidatorContext) {
+                validator(this: PlannedRoutineValidatorContext) {
                     const hasActualTraining =
-                        !!this.training &&
+                        this.training !== null &&
+                        this.training !== undefined &&
                         (Array.isArray(this.training.sessions)
                             ? this.training.sessions.length > 0
                             : true);
 
-                    if (!hasActualTraining) return true;
+                    if (!hasActualTraining) {
+                        return true;
+                    }
 
                     if (!this.isNew && this.isModified("plannedRoutine")) {
                         return false;
@@ -218,35 +314,40 @@ const WorkoutDaySchema = new Schema(
     {
         timestamps: true,
         toJSON: {
-            transform: (_doc, ret: any) => {
+            transform: (_doc: unknown, ret: JsonTransformRet) => {
                 const { _id, __v, ...rest } = ret;
 
-                if (Array.isArray(rest.training?.sessions)) {
-                    rest.training.sessions = rest.training.sessions.map((session: any) => {
-                        const { _id: sessionId, ...sessionRest } = session;
-
-                        if (Array.isArray(sessionRest.exercises)) {
-                            sessionRest.exercises = sessionRest.exercises.map((exercise: any) => {
-                                const { _id: exerciseId, ...exerciseRest } = exercise;
-                                return {
-                                    id: String(exerciseId),
-                                    ...exerciseRest,
-                                };
-                            });
+                const mappedTraining =
+                    rest.training !== null && rest.training !== undefined
+                        ? {
+                            ...rest.training,
+                            sessions: Array.isArray(rest.training.sessions)
+                                ? rest.training.sessions.map((session) =>
+                                    mapSessionForJson(session as JsonWorkoutSession)
+                                )
+                                : rest.training.sessions ?? null,
                         }
+                        : rest.training ?? null;
 
-                        return {
-                            id: String(sessionId),
-                            ...sessionRest,
-                        };
-                    });
-                }
+                const mappedPlannedMeta =
+                    rest.plannedMeta !== null && rest.plannedMeta !== undefined
+                        ? {
+                            ...rest.plannedMeta,
+                            plannedBy:
+                                rest.plannedMeta.plannedBy !== undefined
+                                    ? String(rest.plannedMeta.plannedBy)
+                                    : rest.plannedMeta.plannedBy,
+                        }
+                        : rest.plannedMeta ?? null;
 
                 return {
-                    id: String(_id),
+                    id: _id !== undefined ? String(_id) : "",
                     ...rest,
-                    createdAt: new Date(rest.createdAt).toISOString(),
-                    updatedAt: new Date(rest.updatedAt).toISOString(),
+                    userId: rest.userId !== undefined ? String(rest.userId) : rest.userId,
+                    training: mappedTraining,
+                    plannedMeta: mappedPlannedMeta,
+                    createdAt: toIsoString(rest.createdAt),
+                    updatedAt: toIsoString(rest.updatedAt),
                 };
             },
         },

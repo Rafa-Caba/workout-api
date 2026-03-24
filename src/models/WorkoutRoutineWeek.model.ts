@@ -1,4 +1,13 @@
+// src/models/WorkoutRoutineWeek.model.ts
+
 import mongoose, { Schema, type InferSchemaType, type Model } from "mongoose";
+
+type JsonObject = Record<string, unknown>;
+
+type JsonWorkoutRoutineWeek = JsonObject & {
+    _id?: unknown;
+    __v?: unknown;
+};
 
 const RoutineExerciseSchema = new Schema(
     {
@@ -83,15 +92,19 @@ const WorkoutRoutineWeekSchema = new Schema(
         // CANONICAL
         days: { type: [RoutineDaySchema], required: true },
 
-        // UI helper only
+        // UI/helper/meta flow stays as-is for current GymCheck/routine usage.
         meta: { type: Schema.Types.Mixed, default: null },
     },
     {
         timestamps: true,
         toJSON: {
-            transform: (_doc, ret: any) => {
+            transform: (_doc, ret: JsonWorkoutRoutineWeek) => {
                 const { _id, __v, ...rest } = ret;
-                return { id: String(_id), ...rest };
+
+                return {
+                    id: typeof _id === "undefined" ? "" : String(_id),
+                    ...rest,
+                };
             },
         },
     }
@@ -100,7 +113,9 @@ const WorkoutRoutineWeekSchema = new Schema(
 // One routine template per user per week
 WorkoutRoutineWeekSchema.index({ userId: 1, weekKey: 1 }, { unique: true });
 
-export type WorkoutRoutineWeekDocument = InferSchemaType<typeof WorkoutRoutineWeekSchema> & { id: string };
+export type WorkoutRoutineWeekDocument = InferSchemaType<typeof WorkoutRoutineWeekSchema> & {
+    id: string;
+};
 
 export const WorkoutRoutineWeekModel: Model<WorkoutRoutineWeekDocument> =
     mongoose.models.WorkoutRoutineWeek ||
