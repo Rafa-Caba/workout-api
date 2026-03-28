@@ -1,3 +1,5 @@
+// /src/types/movement.types.ts
+
 export type MediaResourceType = "image" | "video";
 
 export type MovementMedia = {
@@ -17,8 +19,9 @@ export type Movement = {
     name: string;
     nameLower: string;
 
-    muscleGroup: string | null;
-    equipment: string | null;
+    // Multi-select fields stored as real arrays
+    muscleGroup: string[];
+    equipment: string[];
 
     isActive: boolean;
 
@@ -29,5 +32,25 @@ export type Movement = {
     updatedAt: string;
 };
 
-export type MovementListResponse = { movements: Movement[] };
-export type MovementDeletedResponse = { deleted: true; movement: Movement };
+export type CreateMovementBody = {
+    name: string;
+    muscleGroup: string[];
+    equipment: string[];
+    isActive?: boolean;
+};
+
+export type UpdateMovementBody = {
+    name?: string;
+    muscleGroup?: string[];
+    equipment?: string[];
+    isActive?: boolean;
+};
+
+export type MovementListResponse = {
+    movements: Movement[];
+};
+
+export type MovementDeletedResponse = {
+    deleted: true;
+    movement: Movement;
+};

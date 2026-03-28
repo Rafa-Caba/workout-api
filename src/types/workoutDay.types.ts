@@ -68,11 +68,28 @@ export type Exercise = {
 export type CreateExerciseInput = Omit<Exercise, "id">;
 
 export type TrainingSessionMeta = {
+    /**
+     * Existing GymCheck / FE flow fields
+     */
+    sessionKey?: string | null;
+    trainingSource?: string | null;
+    dayEffortRpe?: number | null;
+
+    /**
+     * Health-enriched metadata fields
+     */
     source: WorkoutDataSource | null;
     sourceDevice: WorkoutSourceDevice | null;
     importedAt: string | null;
     lastSyncedAt: string | null;
     sessionKind: WorkoutSessionKind | null;
+
+    /**
+     * Optional useful metadata helpers
+     */
+    externalId?: string | null;
+    originalType?: string | null;
+    provider?: string | null;
 };
 
 export type TrainingSession = {

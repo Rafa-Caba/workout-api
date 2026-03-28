@@ -44,20 +44,45 @@ const recordUnknownNullable = z.record(z.string(), z.unknown()).nullable();
 
 const trainingSessionMetaSchema = z
     .object({
+        /**
+         * Existing GymCheck / FE flow fields
+         */
+        sessionKey: z.string().max(120).nullable().optional(),
+        trainingSource: z.string().max(120).nullable().optional(),
+        dayEffortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
+
+        /**
+         * Health-enriched metadata fields
+         */
         source: z.enum(["manual", "healthkit", "health-connect"]).nullable().optional(),
         sourceDevice: z.string().max(200).nullable().optional(),
         importedAt: z.string().max(60).nullable().optional(),
         lastSyncedAt: z.string().max(60).nullable().optional(),
         sessionKind: z.enum(["device-import", "gym-check"]).nullable().optional(),
+
+        /**
+         * Optional useful metadata helpers
+         */
+        externalId: z.string().max(200).nullable().optional(),
+        originalType: z.string().max(200).nullable().optional(),
+        provider: z.string().max(120).nullable().optional(),
     })
     .strict()
     .transform(
         (value): TrainingSessionMeta => ({
+            sessionKey: value.sessionKey ?? null,
+            trainingSource: value.trainingSource ?? null,
+            dayEffortRpe: value.dayEffortRpe ?? null,
+
             source: value.source ?? null,
             sourceDevice: value.sourceDevice ?? null,
             importedAt: value.importedAt ?? null,
             lastSyncedAt: value.lastSyncedAt ?? null,
             sessionKind: value.sessionKind ?? null,
+
+            externalId: value.externalId ?? null,
+            originalType: value.originalType ?? null,
+            provider: value.provider ?? null,
         })
     );
 

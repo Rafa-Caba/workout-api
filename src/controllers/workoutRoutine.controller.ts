@@ -261,6 +261,8 @@ export const patchGymCheckForDay: RequestHandler = async (req, res: Response) =>
 
     const payload = typedReq.validatedBody ?? {};
 
+    console.log({ payload });
+
     const out = await patchRoutineGymCheckDay(userId, weekKey, rawDayKey, payload);
 
     if (!out) {

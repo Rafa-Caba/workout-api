@@ -1,7 +1,11 @@
+// /src/routes/movement.routes.ts
+
 import { Router } from "express";
+
+import * as MovementController from "../controllers/movement.controller";
+import { uploadMovementMedia } from "../middlewares/cloudinary";
 import { requireAuth } from "../middlewares/requireAuth";
 import { validate } from "../middlewares/validate";
-
 import {
     createMovementSchema,
     listMovementsQuerySchema,
@@ -9,12 +13,11 @@ import {
     updateMovementSchema,
 } from "../validations/movement.schemas";
 
-import * as MovementController from "../controllers/movement.controller";
-import { uploadMovementMedia } from "../middlewares/cloudinary";
-
 const router = Router();
 
-// Listar movimientos (sin cambios, JSON)
+/**
+ * List movements.
+ */
 router.get(
     "/movements",
     requireAuth,
@@ -22,7 +25,10 @@ router.get(
     MovementController.list
 );
 
-// Crear movimiento (ahora acepta multipart/form-data con "media")
+/**
+ * Create movement.
+ * Accepts multipart/form-data with optional "media" file.
+ */
 router.post(
     "/movements",
     requireAuth,
@@ -31,15 +37,24 @@ router.post(
     MovementController.create
 );
 
+/**
+ * Update movement.
+ * Accepts multipart/form-data with optional "media" file.
+ */
 router.put(
     "/movements/:id",
     requireAuth,
     uploadMovementMedia.single("media"),
-    validate({ params: movementIdParamSchema, body: updateMovementSchema }),
+    validate({
+        params: movementIdParamSchema,
+        body: updateMovementSchema,
+    }),
     MovementController.update
 );
 
-// Obtener por id (sin cambios, JSON)
+/**
+ * Get movement by id.
+ */
 router.get(
     "/movements/:id",
     requireAuth,
@@ -47,9 +62,9 @@ router.get(
     MovementController.getById
 );
 
-
-
-// Eliminar movimiento (sin cambios)
+/**
+ * Delete movement.
+ */
 router.delete(
     "/movements/:id",
     requireAuth,
