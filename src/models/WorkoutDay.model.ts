@@ -1,4 +1,4 @@
-// src/models/WorkoutDay.model.ts
+// /src/models/WorkoutDay.model.ts
 
 import mongoose, { Schema, type InferSchemaType, type Model } from "mongoose";
 
@@ -96,6 +96,41 @@ const WorkoutExerciseSchema = new Schema(
     { _id: true }
 );
 
+const WorkoutOutdoorMetricsSchema = new Schema(
+    {
+        distanceKm: { type: Number, default: null, min: 0 },
+        steps: { type: Number, default: null, min: 0 },
+        elevationGainM: { type: Number, default: null, min: 0 },
+
+        paceSecPerKm: { type: Number, default: null, min: 0 },
+        avgSpeedKmh: { type: Number, default: null, min: 0 },
+        maxSpeedKmh: { type: Number, default: null, min: 0 },
+
+        cadenceRpm: { type: Number, default: null, min: 0 },
+        strideLengthM: { type: Number, default: null, min: 0 },
+    },
+    { _id: false }
+);
+
+const WorkoutRouteSummarySchema = new Schema(
+    {
+        pointCount: { type: Number, required: true, min: 0 },
+
+        startLatitude: { type: Number, default: null, min: -90, max: 90 },
+        startLongitude: { type: Number, default: null, min: -180, max: 180 },
+
+        endLatitude: { type: Number, default: null, min: -90, max: 90 },
+        endLongitude: { type: Number, default: null, min: -180, max: 180 },
+
+        minLatitude: { type: Number, default: null, min: -90, max: 90 },
+        maxLatitude: { type: Number, default: null, min: -90, max: 90 },
+
+        minLongitude: { type: Number, default: null, min: -180, max: 180 },
+        maxLongitude: { type: Number, default: null, min: -180, max: 180 },
+    },
+    { _id: false }
+);
+
 const WorkoutSessionMetaSchema = new Schema(
     {
         source: {
@@ -109,8 +144,20 @@ const WorkoutSessionMetaSchema = new Schema(
         sessionKind: {
             type: String,
             default: null,
-            enum: ["device-import", "gym-check"],
+            enum: ["device-import", "gym-check", "manual-outdoor"],
         },
+
+        /**
+         * Helpful metadata fields used by health/outdoor/manual flows.
+         * These are explicitly declared so the stored shape stays consistent
+         * even though the sub-schema remains flexible.
+         */
+        externalId: { type: String, default: null, trim: true, maxlength: 200 },
+        originalType: { type: String, default: null, trim: true, maxlength: 200 },
+        provider: { type: String, default: null, trim: true, maxlength: 120 },
+        sessionKey: { type: String, default: null, trim: true, maxlength: 120 },
+        trainingSource: { type: String, default: null, trim: true, maxlength: 120 },
+        dayEffortRpe: { type: Number, default: null, min: 0, max: 10 },
     },
     { _id: false, strict: false }
 );
@@ -118,6 +165,12 @@ const WorkoutSessionMetaSchema = new Schema(
 const WorkoutSessionSchema = new Schema(
     {
         type: { type: String, required: true, trim: true, maxlength: 120 },
+
+        activityType: {
+            type: String,
+            default: null,
+            enum: ["walking", "running", null],
+        },
 
         startAt: { type: String, default: null },
         endAt: { type: String, default: null },
@@ -136,6 +189,10 @@ const WorkoutSessionSchema = new Schema(
 
         paceSecPerKm: { type: Number, default: null, min: 0 },
         cadenceRpm: { type: Number, default: null, min: 0 },
+
+        hasRoute: { type: Boolean, default: false },
+        outdoorMetrics: { type: WorkoutOutdoorMetricsSchema, default: null },
+        routeSummary: { type: WorkoutRouteSummarySchema, default: null },
 
         effortRpe: { type: Number, default: null, min: 0, max: 10 },
         notes: { type: String, default: null, maxlength: 5000 },

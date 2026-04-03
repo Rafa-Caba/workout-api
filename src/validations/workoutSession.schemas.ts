@@ -10,7 +10,9 @@ import type {
 import { isoDateSchema } from "./workoutDay.schemas";
 
 const boolFromQuery = z.preprocess((value: unknown) => {
-    if (typeof value === "boolean") return value;
+    if (typeof value === "boolean") {
+        return value;
+    }
 
     if (typeof value === "string") {
         const normalizedValue = value.trim().toLowerCase();
@@ -42,6 +44,8 @@ const nonNegNum = z.coerce
 const nullableString = z.string().nullable();
 const recordUnknownNullable = z.record(z.string(), z.unknown()).nullable();
 
+const outdoorActivityTypeSchema = z.enum(["walking", "running"]);
+
 const trainingSessionMetaSchema = z
     .object({
         /**
@@ -58,7 +62,7 @@ const trainingSessionMetaSchema = z
         sourceDevice: z.string().max(200).nullable().optional(),
         importedAt: z.string().max(60).nullable().optional(),
         lastSyncedAt: z.string().max(60).nullable().optional(),
-        sessionKind: z.enum(["device-import", "gym-check"]).nullable().optional(),
+        sessionKind: z.enum(["device-import", "gym-check", "manual-outdoor"]),
 
         /**
          * Optional useful metadata helpers
@@ -144,8 +148,66 @@ const createExerciseSchema = z
         })
     );
 
+const workoutOutdoorMetricsSchema = z
+    .object({
+        distanceKm: nonNegNum.nullable().optional(),
+        steps: nonNegInt.nullable().optional(),
+        elevationGainM: nonNegNum.nullable().optional(),
+
+        paceSecPerKm: nonNegNum.nullable().optional(),
+        avgSpeedKmh: nonNegNum.nullable().optional(),
+        maxSpeedKmh: nonNegNum.nullable().optional(),
+
+        cadenceRpm: nonNegNum.nullable().optional(),
+        strideLengthM: nonNegNum.nullable().optional(),
+    })
+    .strict()
+    .transform((value) => ({
+        distanceKm: value.distanceKm ?? null,
+        steps: value.steps ?? null,
+        elevationGainM: value.elevationGainM ?? null,
+
+        paceSecPerKm: value.paceSecPerKm ?? null,
+        avgSpeedKmh: value.avgSpeedKmh ?? null,
+        maxSpeedKmh: value.maxSpeedKmh ?? null,
+
+        cadenceRpm: value.cadenceRpm ?? null,
+        strideLengthM: value.strideLengthM ?? null,
+    }));
+
+const workoutRouteSummarySchema = z
+    .object({
+        pointCount: nonNegInt,
+
+        startLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+        startLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+
+        endLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+        endLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+
+        minLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+        maxLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+
+        minLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+        maxLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+    })
+    .strict()
+    .transform((value) => ({
+        pointCount: value.pointCount,
+        startLatitude: value.startLatitude ?? null,
+        startLongitude: value.startLongitude ?? null,
+        endLatitude: value.endLatitude ?? null,
+        endLongitude: value.endLongitude ?? null,
+        minLatitude: value.minLatitude ?? null,
+        maxLatitude: value.maxLatitude ?? null,
+        minLongitude: value.minLongitude ?? null,
+        maxLongitude: value.maxLongitude ?? null,
+    }));
+
 const createSessionBodyBaseSchema = z.object({
     type: z.string().min(1).max(120),
+
+    activityType: outdoorActivityTypeSchema.nullable().optional(),
 
     startAt: nullableString.optional(),
     endAt: nullableString.optional(),
@@ -164,6 +226,10 @@ const createSessionBodyBaseSchema = z.object({
 
     paceSecPerKm: nonNegNum.nullable().optional(),
     cadenceRpm: nonNegNum.nullable().optional(),
+
+    hasRoute: z.coerce.boolean().optional(),
+    outdoorMetrics: workoutOutdoorMetricsSchema.nullable().optional(),
+    routeSummary: workoutRouteSummarySchema.nullable().optional(),
 
     effortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
 
@@ -211,6 +277,8 @@ export const createSessionBodySchema = createSessionBodyBaseSchema
         (value): CreateTrainingSessionInput => ({
             type: value.type,
 
+            activityType: value.activityType ?? null,
+
             startAt: value.startAt ?? null,
             endAt: value.endAt ?? null,
 
@@ -228,6 +296,10 @@ export const createSessionBodySchema = createSessionBodyBaseSchema
 
             paceSecPerKm: value.paceSecPerKm ?? null,
             cadenceRpm: value.cadenceRpm ?? null,
+
+            hasRoute: value.hasRoute ?? false,
+            outdoorMetrics: value.outdoorMetrics ?? null,
+            routeSummary: value.routeSummary ?? null,
 
             effortRpe: value.effortRpe ?? null,
 
@@ -247,6 +319,7 @@ export const patchSessionBodySchema = createSessionBodyBaseSchema
     .transform(
         (value): PatchTrainingSessionInput => ({
             ...(value.type !== undefined ? { type: value.type } : {}),
+            ...(value.activityType !== undefined ? { activityType: value.activityType } : {}),
             ...(value.startAt !== undefined ? { startAt: value.startAt } : {}),
             ...(value.endAt !== undefined ? { endAt: value.endAt } : {}),
             ...(value.durationSeconds !== undefined
@@ -265,6 +338,13 @@ export const patchSessionBodySchema = createSessionBodyBaseSchema
                 ? { paceSecPerKm: value.paceSecPerKm }
                 : {}),
             ...(value.cadenceRpm !== undefined ? { cadenceRpm: value.cadenceRpm } : {}),
+            ...(value.hasRoute !== undefined ? { hasRoute: value.hasRoute } : {}),
+            ...(value.outdoorMetrics !== undefined
+                ? { outdoorMetrics: value.outdoorMetrics }
+                : {}),
+            ...(value.routeSummary !== undefined
+                ? { routeSummary: value.routeSummary }
+                : {}),
             ...(value.effortRpe !== undefined ? { effortRpe: value.effortRpe } : {}),
             ...(value.notes !== undefined ? { notes: value.notes } : {}),
             ...(value.exercises !== undefined ? { exercises: value.exercises } : {}),

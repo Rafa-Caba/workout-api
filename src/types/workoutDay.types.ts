@@ -1,6 +1,12 @@
-// src/types/workoutDay.types.ts
+// backend/src/workout/types/workoutDay.types.ts
 // Core domain types for workout days, sleep tracking, training sessions,
 // planned routines, calendar rollups, upsert payloads, and historical backfill.
+
+import type {
+    OutdoorActivityType,
+    WorkoutOutdoorMetrics,
+    WorkoutRouteSummary,
+} from "./outdoorSession.types";
 
 export type ISODate = string; // "YYYY-MM-DD"
 export type WeekKey = string; // "YYYY-W##"
@@ -9,7 +15,8 @@ export type ResourceType = "image" | "video";
 
 export type WorkoutDataSource = "manual" | "healthkit" | "health-connect";
 
-export type WorkoutSessionKind = "device-import" | "gym-check";
+// export type WorkoutSessionKind = "device-import" | "gym-check";
+export type WorkoutSessionKind = "device-import" | "gym-check" | "manual-outdoor";
 
 export type WorkoutSourceDevice = string;
 
@@ -95,6 +102,13 @@ export type TrainingSessionMeta = {
 export type TrainingSession = {
     id: string;
     type: string;
+
+    /**
+     * Neutral activity family for outdoor support.
+     * Existing gym/manual sessions can keep this as null.
+     */
+    activityType: OutdoorActivityType | null;
+
     startAt: string | null;
     endAt: string | null;
     durationSeconds: number | null;
@@ -107,6 +121,15 @@ export type TrainingSession = {
     elevationGainM: number | null;
     paceSecPerKm: number | null;
     cadenceRpm: number | null;
+
+    /**
+     * Outdoor route/session helpers.
+     * No raw route points are persisted here yet.
+     */
+    hasRoute: boolean;
+    outdoorMetrics: WorkoutOutdoorMetrics | null;
+    routeSummary: WorkoutRouteSummary | null;
+
     effortRpe: number | null;
     notes: string | null;
     meta: TrainingSessionMeta | null;

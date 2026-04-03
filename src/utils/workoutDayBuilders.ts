@@ -4,8 +4,15 @@ import type {
     BuildOpts,
     CalendarDayFull,
     CalendarTotals,
+    SleepBlock,
+    TrainingBlock,
+    TrainingSession,
+    TrainingSummary,
     TrainingTypeTotals,
     WeekRange,
+    WorkoutDataSource,
+    PlannedRoutine,
+    PlannedMeta,
 } from "../types/workoutDay.types";
 
 /**
@@ -14,21 +21,212 @@ import type {
  * =========================================================
  */
 
+type NullableNumber = number | null;
+
+type TrainingTypeAccumulator = {
+    type: string;
+    sessions: number;
+
+    totalDurationSeconds: NullableNumber;
+    totalActiveKcal: NullableNumber;
+    totalKcal: NullableNumber;
+
+    totalDistanceKm: NullableNumber;
+    totalSteps: NullableNumber;
+    totalElevationGainM: NullableNumber;
+
+    maxHr: NullableNumber;
+
+    hrWeightedSum: number;
+    hrWeight: number;
+
+    cadenceWeightedSum: number;
+    cadenceWeight: number;
+
+    paceWeightedSum: number;
+    paceWeight: number;
+};
+
+type BuildableDayInput = {
+    date?: string;
+    weekKey?: string;
+
+    sleep?: SleepBlock | null;
+    training?: TrainingBlock | null;
+
+    plannedRoutine?: PlannedRoutine | null;
+    plannedMeta?: PlannedMeta | null;
+
+    notes?: string | null;
+    tags?: string[] | null;
+    meta?: Record<string, unknown> | null;
+
+    hasPlanned?: boolean;
+};
+
+type TrainingBlockOutput = Omit<TrainingBlock, "sessions"> & {
+    sessions: TrainingSession[] | null;
+};
+
 const safeAvg = (sum: number, count: number): number | null => {
     if (count <= 0) return null;
     return sum / count;
 };
 
-const addNullable = (a: number | null, b: number | null): number | null => {
+const addNullable = (a: NullableNumber, b: NullableNumber): NullableNumber => {
     if (a === null && b === null) return null;
     return (a ?? 0) + (b ?? 0);
 };
 
-const round1 = (n: number) => Math.round(n * 10) / 10;
+const round1 = (value: number): number => Math.round(value * 10) / 10;
 
-const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isNumber = (value: unknown): value is number =>
+    typeof value === "number" && Number.isFinite(value);
 
-const toArr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
+const hasMeaningfulSleep = (sleep: SleepBlock | null | undefined): boolean => {
+    if (!sleep) return false;
+
+    return (
+        sleep.timeAsleepMinutes != null ||
+        sleep.timeInBedMinutes != null ||
+        sleep.score != null ||
+        sleep.awakeMinutes != null ||
+        sleep.remMinutes != null ||
+        sleep.coreMinutes != null ||
+        sleep.deepMinutes != null
+    );
+};
+
+const hasMeaningfulPlannedRoutine = (
+    plannedRoutine: PlannedRoutine | null | undefined
+): boolean => {
+    if (!plannedRoutine) return false;
+
+    return (
+        (typeof plannedRoutine.sessionType === "string" &&
+            plannedRoutine.sessionType.trim().length > 0) ||
+        (typeof plannedRoutine.focus === "string" &&
+            plannedRoutine.focus.trim().length > 0) ||
+        (Array.isArray(plannedRoutine.exercises) &&
+            plannedRoutine.exercises.length > 0)
+    );
+};
+
+const getTrainingSessions = (
+    training: TrainingBlock | null | undefined
+): TrainingSession[] | null => {
+    const sessions = training?.sessions ?? null;
+    return Array.isArray(sessions) ? sessions : null;
+};
+
+const normalizeSessionForOutput = (session: TrainingSession): TrainingSession => {
+    return {
+        ...session,
+        meta: session.meta ?? null,
+        media: Array.isArray(session.media) ? session.media : [],
+        activityType: session.activityType ?? null,
+        hasRoute: session.hasRoute ?? false,
+        outdoorMetrics: session.outdoorMetrics ?? null,
+        routeSummary: session.routeSummary ?? null,
+    };
+};
+
+const stripTrainingRawForOutput = (
+    training: TrainingBlock | null
+): TrainingBlockOutput | null => {
+    if (!training) return null;
+
+    const normalizedSessions = Array.isArray(training.sessions)
+        ? training.sessions.map((session) => normalizeSessionForOutput(session))
+        : training.sessions ?? null;
+
+    return {
+        sessions: normalizedSessions,
+        source: training.source,
+        dayEffortRpe: training.dayEffortRpe,
+        raw: null,
+    };
+};
+
+const buildEmptyCalendarTotals = (): CalendarTotals => ({
+    totalSessions: 0,
+
+    totalDurationSeconds: null,
+    totalActiveKcal: null,
+    totalKcal: null,
+
+    totalDistanceKm: null,
+    totalSteps: null,
+    totalElevationGainM: null,
+
+    avgHr: null,
+    maxHr: null,
+
+    avgPaceSecPerKm: null,
+    avgCadenceRpm: null,
+});
+
+const createTrainingTypeAccumulator = (type: string): TrainingTypeAccumulator => ({
+    type,
+    sessions: 0,
+
+    totalDurationSeconds: null,
+    totalActiveKcal: null,
+    totalKcal: null,
+
+    totalDistanceKm: null,
+    totalSteps: null,
+    totalElevationGainM: null,
+
+    maxHr: null,
+
+    hrWeightedSum: 0,
+    hrWeight: 0,
+
+    cadenceWeightedSum: 0,
+    cadenceWeight: 0,
+
+    paceWeightedSum: 0,
+    paceWeight: 0,
+});
+
+const toTrainingTypeTotals = (
+    accumulator: TrainingTypeAccumulator
+): TrainingTypeTotals => {
+    const avgHr =
+        accumulator.hrWeight > 0
+            ? round1(accumulator.hrWeightedSum / accumulator.hrWeight)
+            : null;
+
+    const avgCadenceRpm =
+        accumulator.cadenceWeight > 0
+            ? round1(accumulator.cadenceWeightedSum / accumulator.cadenceWeight)
+            : null;
+
+    const avgPaceSecPerKm =
+        accumulator.paceWeight > 0
+            ? round1(accumulator.paceWeightedSum / accumulator.paceWeight)
+            : null;
+
+    return {
+        type: accumulator.type,
+        sessions: accumulator.sessions,
+
+        totalDurationSeconds: accumulator.totalDurationSeconds,
+        totalActiveKcal: accumulator.totalActiveKcal,
+        totalKcal: accumulator.totalKcal,
+
+        totalDistanceKm: accumulator.totalDistanceKm,
+        totalSteps: accumulator.totalSteps,
+        totalElevationGainM: accumulator.totalElevationGainM,
+
+        avgHr,
+        maxHr: accumulator.maxHr,
+
+        avgPaceSecPerKm,
+        avgCadenceRpm,
+    };
+};
 
 /**
  * =========================================================
@@ -36,41 +234,25 @@ const toArr = (v: unknown): any[] => (Array.isArray(v) ? v : []);
  * =========================================================
  */
 
-export const computeTrainingTotals = (day: any): CalendarTotals => {
-    const sessions = day?.training?.sessions ?? null;
+export const computeTrainingTotals = (
+    day: BuildableDayInput
+): CalendarTotals => {
+    const sessions = getTrainingSessions(day.training);
 
-    // sessions must be a non-empty array to contribute totals
-    if (!Array.isArray(sessions) || sessions.length === 0) {
-        return {
-            totalSessions: 0,
-
-            totalDurationSeconds: null,
-            totalActiveKcal: null,
-            totalKcal: null,
-
-            totalDistanceKm: null,
-            totalSteps: null,
-            totalElevationGainM: null,
-
-            avgHr: null,
-            maxHr: null,
-
-            avgPaceSecPerKm: null,
-            avgCadenceRpm: null,
-        };
+    if (!sessions || sessions.length === 0) {
+        return buildEmptyCalendarTotals();
     }
 
     let totalSessions = 0;
 
-    let totalDurationSeconds: number | null = null;
-    let totalActiveKcal: number | null = null;
-    let totalKcal: number | null = null;
+    let totalDurationSeconds: NullableNumber = null;
+    let totalActiveKcal: NullableNumber = null;
+    let totalKcal: NullableNumber = null;
 
-    let totalDistanceKm: number | null = null;
-    let totalSteps: number | null = null;
-    let totalElevationGainM: number | null = null;
+    let totalDistanceKm: NullableNumber = null;
+    let totalSteps: NullableNumber = null;
+    let totalElevationGainM: NullableNumber = null;
 
-    // weighted averages
     let hrWeightedSum = 0;
     let hrWeight = 0;
 
@@ -78,56 +260,68 @@ export const computeTrainingTotals = (day: any): CalendarTotals => {
     let cadenceWeight = 0;
 
     let paceWeightedSum = 0;
-    let paceWeight = 0; // distance weighting
+    let paceWeight = 0;
 
-    let maxHr: number | null = null;
+    let maxHr: NullableNumber = null;
 
-    for (const s of sessions) {
+    for (const session of sessions) {
         totalSessions += 1;
 
-        totalDurationSeconds = addNullable(totalDurationSeconds, s.durationSeconds ?? null);
-        totalActiveKcal = addNullable(totalActiveKcal, s.activeKcal ?? null);
-        totalKcal = addNullable(totalKcal, s.totalKcal ?? null);
+        totalDurationSeconds = addNullable(
+            totalDurationSeconds,
+            session.durationSeconds ?? null
+        );
+        totalActiveKcal = addNullable(totalActiveKcal, session.activeKcal ?? null);
+        totalKcal = addNullable(totalKcal, session.totalKcal ?? null);
 
-        totalDistanceKm = addNullable(totalDistanceKm, s.distanceKm ?? null);
-        totalSteps = addNullable(totalSteps, s.steps ?? null);
-        totalElevationGainM = addNullable(totalElevationGainM, s.elevationGainM ?? null);
+        totalDistanceKm = addNullable(totalDistanceKm, session.distanceKm ?? null);
+        totalSteps = addNullable(totalSteps, session.steps ?? null);
+        totalElevationGainM = addNullable(
+            totalElevationGainM,
+            session.elevationGainM ?? null
+        );
 
-        if (isNumber(s.maxHr)) {
-            maxHr = maxHr === null ? s.maxHr : Math.max(maxHr, s.maxHr);
+        if (isNumber(session.maxHr)) {
+            maxHr = maxHr === null ? session.maxHr : Math.max(maxHr, session.maxHr);
         }
 
-        // duration-weighted avgHr
-        if (isNumber(s.avgHr)) {
-            const w = isNumber(s.durationSeconds) ? s.durationSeconds : 0;
-            if (w > 0) {
-                hrWeightedSum += s.avgHr * w;
-                hrWeight += w;
+        if (isNumber(session.avgHr)) {
+            const weight = isNumber(session.durationSeconds)
+                ? session.durationSeconds
+                : 0;
+
+            if (weight > 0) {
+                hrWeightedSum += session.avgHr * weight;
+                hrWeight += weight;
             }
         }
 
-        // duration-weighted cadence
-        if (isNumber(s.cadenceRpm)) {
-            const w = isNumber(s.durationSeconds) ? s.durationSeconds : 0;
-            if (w > 0) {
-                cadenceWeightedSum += s.cadenceRpm * w;
-                cadenceWeight += w;
+        if (isNumber(session.cadenceRpm)) {
+            const weight = isNumber(session.durationSeconds)
+                ? session.durationSeconds
+                : 0;
+
+            if (weight > 0) {
+                cadenceWeightedSum += session.cadenceRpm * weight;
+                cadenceWeight += weight;
             }
         }
 
-        // distance-weighted pace
-        if (isNumber(s.paceSecPerKm)) {
-            const w = isNumber(s.distanceKm) ? s.distanceKm : 0;
-            if (w > 0) {
-                paceWeightedSum += s.paceSecPerKm * w;
-                paceWeight += w;
+        if (isNumber(session.paceSecPerKm)) {
+            const weight = isNumber(session.distanceKm) ? session.distanceKm : 0;
+
+            if (weight > 0) {
+                paceWeightedSum += session.paceSecPerKm * weight;
+                paceWeight += weight;
             }
         }
     }
 
     const avgHr = hrWeight > 0 ? round1(hrWeightedSum / hrWeight) : null;
-    const avgCadenceRpm = cadenceWeight > 0 ? round1(cadenceWeightedSum / cadenceWeight) : null;
-    const avgPaceSecPerKm = paceWeight > 0 ? round1(paceWeightedSum / paceWeight) : null;
+    const avgCadenceRpm =
+        cadenceWeight > 0 ? round1(cadenceWeightedSum / cadenceWeight) : null;
+    const avgPaceSecPerKm =
+        paceWeight > 0 ? round1(paceWeightedSum / paceWeight) : null;
 
     return {
         totalSessions,
@@ -148,162 +342,150 @@ export const computeTrainingTotals = (day: any): CalendarTotals => {
     };
 };
 
-export const computeTrainingTypes = (day: any): TrainingTypeTotals[] => {
-    const sessions = day?.training?.sessions ?? null;
-    if (!Array.isArray(sessions) || sessions.length === 0) return [];
+export const computeTrainingTypes = (
+    day: BuildableDayInput
+): TrainingTypeTotals[] => {
+    const sessions = getTrainingSessions(day.training);
+    if (!sessions || sessions.length === 0) return [];
 
-    const map = new Map<string, any>();
+    const accumulatorMap = new Map<string, TrainingTypeAccumulator>();
 
-    for (const s of sessions) {
-        const type = String(s.type ?? "Unknown");
+    for (const session of sessions) {
+        const type = String(session.type ?? "Unknown");
 
-        if (!map.has(type)) {
-            map.set(type, {
-                type,
-                sessions: 0,
-
-                totalDurationSeconds: null,
-                totalActiveKcal: null,
-                totalKcal: null,
-
-                totalDistanceKm: null,
-                totalSteps: null,
-                totalElevationGainM: null,
-
-                hrWeightedSum: 0,
-                hrWeight: 0,
-
-                cadenceWeightedSum: 0,
-                cadenceWeight: 0,
-
-                paceWeightedSum: 0,
-                paceWeight: 0,
-
-                maxHr: null as number | null,
-            });
+        if (!accumulatorMap.has(type)) {
+            accumulatorMap.set(type, createTrainingTypeAccumulator(type));
         }
 
-        const agg = map.get(type);
-
-        agg.sessions += 1;
-
-        agg.totalDurationSeconds = addNullable(agg.totalDurationSeconds, s.durationSeconds ?? null);
-        agg.totalActiveKcal = addNullable(agg.totalActiveKcal, s.activeKcal ?? null);
-        agg.totalKcal = addNullable(agg.totalKcal, s.totalKcal ?? null);
-
-        agg.totalDistanceKm = addNullable(agg.totalDistanceKm, s.distanceKm ?? null);
-        agg.totalSteps = addNullable(agg.totalSteps, s.steps ?? null);
-        agg.totalElevationGainM = addNullable(agg.totalElevationGainM, s.elevationGainM ?? null);
-
-        if (isNumber(s.maxHr)) {
-            agg.maxHr = agg.maxHr === null ? s.maxHr : Math.max(agg.maxHr, s.maxHr);
+        const accumulator = accumulatorMap.get(type);
+        if (!accumulator) {
+            continue;
         }
 
-        if (isNumber(s.avgHr)) {
-            const w = isNumber(s.durationSeconds) ? s.durationSeconds : 0;
-            if (w > 0) {
-                agg.hrWeightedSum += s.avgHr * w;
-                agg.hrWeight += w;
+        accumulator.sessions += 1;
+
+        accumulator.totalDurationSeconds = addNullable(
+            accumulator.totalDurationSeconds,
+            session.durationSeconds ?? null
+        );
+        accumulator.totalActiveKcal = addNullable(
+            accumulator.totalActiveKcal,
+            session.activeKcal ?? null
+        );
+        accumulator.totalKcal = addNullable(
+            accumulator.totalKcal,
+            session.totalKcal ?? null
+        );
+
+        accumulator.totalDistanceKm = addNullable(
+            accumulator.totalDistanceKm,
+            session.distanceKm ?? null
+        );
+        accumulator.totalSteps = addNullable(
+            accumulator.totalSteps,
+            session.steps ?? null
+        );
+        accumulator.totalElevationGainM = addNullable(
+            accumulator.totalElevationGainM,
+            session.elevationGainM ?? null
+        );
+
+        if (isNumber(session.maxHr)) {
+            accumulator.maxHr =
+                accumulator.maxHr === null
+                    ? session.maxHr
+                    : Math.max(accumulator.maxHr, session.maxHr);
+        }
+
+        if (isNumber(session.avgHr)) {
+            const weight = isNumber(session.durationSeconds)
+                ? session.durationSeconds
+                : 0;
+
+            if (weight > 0) {
+                accumulator.hrWeightedSum += session.avgHr * weight;
+                accumulator.hrWeight += weight;
             }
         }
 
-        if (isNumber(s.cadenceRpm)) {
-            const w = isNumber(s.durationSeconds) ? s.durationSeconds : 0;
-            if (w > 0) {
-                agg.cadenceWeightedSum += s.cadenceRpm * w;
-                agg.cadenceWeight += w;
+        if (isNumber(session.cadenceRpm)) {
+            const weight = isNumber(session.durationSeconds)
+                ? session.durationSeconds
+                : 0;
+
+            if (weight > 0) {
+                accumulator.cadenceWeightedSum += session.cadenceRpm * weight;
+                accumulator.cadenceWeight += weight;
             }
         }
 
-        if (isNumber(s.paceSecPerKm)) {
-            const w = isNumber(s.distanceKm) ? s.distanceKm : 0;
-            if (w > 0) {
-                agg.paceWeightedSum += s.paceSecPerKm * w;
-                agg.paceWeight += w;
+        if (isNumber(session.paceSecPerKm)) {
+            const weight = isNumber(session.distanceKm) ? session.distanceKm : 0;
+
+            if (weight > 0) {
+                accumulator.paceWeightedSum += session.paceSecPerKm * weight;
+                accumulator.paceWeight += weight;
             }
         }
     }
 
-    const out: TrainingTypeTotals[] = [];
+    const output = Array.from(accumulatorMap.values()).map((accumulator) =>
+        toTrainingTypeTotals(accumulator)
+    );
 
-    for (const agg of map.values()) {
-        const avgHr = agg.hrWeight > 0 ? round1(agg.hrWeightedSum / agg.hrWeight) : null;
-        const avgCadenceRpm =
-            agg.cadenceWeight > 0 ? round1(agg.cadenceWeightedSum / agg.cadenceWeight) : null;
-        const avgPaceSecPerKm =
-            agg.paceWeight > 0 ? round1(agg.paceWeightedSum / agg.paceWeight) : null;
+    output.sort((a, b) => {
+        if (b.sessions !== a.sessions) {
+            return b.sessions - a.sessions;
+        }
 
-        out.push({
-            type: agg.type,
-            sessions: agg.sessions,
-
-            totalDurationSeconds: agg.totalDurationSeconds,
-            totalActiveKcal: agg.totalActiveKcal,
-            totalKcal: agg.totalKcal,
-
-            totalDistanceKm: agg.totalDistanceKm,
-            totalSteps: agg.totalSteps,
-            totalElevationGainM: agg.totalElevationGainM,
-
-            avgHr,
-            maxHr: agg.maxHr,
-
-            avgPaceSecPerKm,
-            avgCadenceRpm,
-        });
-    }
-
-    out.sort((a, b) => {
-        if (b.sessions !== a.sessions) return b.sessions - a.sessions;
         return a.type.localeCompare(b.type);
     });
 
-    return out;
+    return output;
 };
 
-export const computeSleepSummary = (day: any) => {
-    const s = day?.sleep ?? null;
-    if (!s) return null;
-
-    const hasAny =
-        s.timeAsleepMinutes != null ||
-        s.timeInBedMinutes != null ||
-        s.score != null ||
-        s.awakeMinutes != null ||
-        s.remMinutes != null ||
-        s.coreMinutes != null ||
-        s.deepMinutes != null;
-
-    if (!hasAny) return null;
+export const computeSleepSummary = (
+    day: BuildableDayInput
+): {
+    timeAsleepMinutes: number | null;
+    timeInBedMinutes: number | null;
+    score: number | null;
+    awakeMinutes: number | null;
+    remMinutes: number | null;
+    coreMinutes: number | null;
+    deepMinutes: number | null;
+} | null => {
+    const sleep = day.sleep ?? null;
+    if (!hasMeaningfulSleep(sleep)) return null;
 
     return {
-        timeAsleepMinutes: s.timeAsleepMinutes ?? null,
-        timeInBedMinutes: s.timeInBedMinutes ?? null,
-        score: s.score ?? null,
-        awakeMinutes: s.awakeMinutes ?? null,
-        remMinutes: s.remMinutes ?? null,
-        coreMinutes: s.coreMinutes ?? null,
-        deepMinutes: s.deepMinutes ?? null,
+        timeAsleepMinutes: sleep?.timeAsleepMinutes ?? null,
+        timeInBedMinutes: sleep?.timeInBedMinutes ?? null,
+        score: sleep?.score ?? null,
+        awakeMinutes: sleep?.awakeMinutes ?? null,
+        remMinutes: sleep?.remMinutes ?? null,
+        coreMinutes: sleep?.coreMinutes ?? null,
+        deepMinutes: sleep?.deepMinutes ?? null,
     };
 };
 
-export const computeTrainingSummary = (day: any) => {
-    const t = day?.training ?? null;
-    const sessions = t?.sessions ?? null;
+export const computeTrainingSummary = (
+    day: BuildableDayInput
+): TrainingSummary | null => {
+    const training = day.training ?? null;
+    const sessions = getTrainingSessions(training);
 
     const hasSessionsArray = Array.isArray(sessions);
     const hasTrainingSessions = hasSessionsArray && sessions.length > 0;
 
-    // IMPORTANT:
-    // - if training exists (even with sessions: []) we still consider summary valid if source/dayEffort exist
-    // - we do NOT null-out training just because sessions is []
-    const hasAnyTrainingMeta = t?.dayEffortRpe != null || t?.source != null;
+    const hasAnyTrainingMeta =
+        training?.dayEffortRpe != null || training?.source != null;
 
     if (!hasTrainingSessions && !hasAnyTrainingMeta) return null;
 
     return {
-        source: t?.source ?? null,
-        dayEffortRpe: t?.dayEffortRpe ?? null,
+        source: training?.source ?? null,
+        dayEffortRpe: training?.dayEffortRpe ?? null,
         sessionsCount: hasSessionsArray ? sessions.length : 0,
     };
 };
@@ -332,18 +514,73 @@ export const DEFAULT_FIELDS_ALL = [
     "trainingTypes",
 ] as const;
 
-export const pickFields = (obj: CalendarDayFull, fields: string[] | null): CalendarDayFull => {
-    const allowed = (fields ?? Array.from(DEFAULT_FIELDS_ALL)) as Array<keyof CalendarDayFull>;
+export const pickFields = (
+    obj: CalendarDayFull,
+    fields: string[] | null
+): CalendarDayFull => {
+    const allowed = (fields ?? Array.from(DEFAULT_FIELDS_ALL)) as Array<
+        keyof CalendarDayFull
+    >;
 
-    const out: CalendarDayFull = {};
-    for (const k of allowed) {
-        if (Object.prototype.hasOwnProperty.call(obj, k)) {
-            (out as any)[k] = (obj as any)[k];
+    const output: CalendarDayFull = {};
+
+    for (const key of allowed) {
+        switch (key) {
+            case "date":
+                output.date = obj.date;
+                break;
+            case "weekKey":
+                output.weekKey = obj.weekKey;
+                break;
+            case "hasSleep":
+                output.hasSleep = obj.hasSleep;
+                break;
+            case "hasTraining":
+                output.hasTraining = obj.hasTraining;
+                break;
+            case "hasPlanned":
+                output.hasPlanned = obj.hasPlanned;
+                break;
+            case "sleep":
+                output.sleep = obj.sleep;
+                break;
+            case "training":
+                output.training = obj.training;
+                break;
+            case "plannedRoutine":
+                output.plannedRoutine = obj.plannedRoutine;
+                break;
+            case "plannedMeta":
+                output.plannedMeta = obj.plannedMeta;
+                break;
+            case "notes":
+                output.notes = obj.notes;
+                break;
+            case "tags":
+                output.tags = obj.tags;
+                break;
+            case "meta":
+                output.meta = obj.meta;
+                break;
+            case "sleepSummary":
+                output.sleepSummary = obj.sleepSummary;
+                break;
+            case "trainingSummary":
+                output.trainingSummary = obj.trainingSummary;
+                break;
+            case "trainingTotals":
+                output.trainingTotals = obj.trainingTotals;
+                break;
+            case "trainingTypes":
+                output.trainingTypes = obj.trainingTypes;
+                break;
+            default:
+                break;
         }
     }
-    return out;
-};
 
+    return output;
+};
 
 /**
  * =========================================================
@@ -352,19 +589,21 @@ export const pickFields = (obj: CalendarDayFull, fields: string[] | null): Calen
  */
 
 const addDays = (iso: string, deltaDays: number): string => {
-    const d = new Date(`${iso}T00:00:00.000Z`);
-    d.setUTCDate(d.getUTCDate() + deltaDays);
-    return d.toISOString().slice(0, 10);
+    const date = new Date(`${iso}T00:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() + deltaDays);
+    return date.toISOString().slice(0, 10);
 };
 
 export const enumerateDays = (from: string, to: string): string[] => {
-    const out: string[] = [];
-    let cur = from;
-    while (cur <= to) {
-        out.push(cur);
-        cur = addDays(cur, 1);
+    const output: string[] = [];
+    let currentDate = from;
+
+    while (currentDate <= to) {
+        output.push(currentDate);
+        currentDate = addDays(currentDate, 1);
     }
-    return out;
+
+    return output;
 };
 
 /**
@@ -375,52 +614,45 @@ export const enumerateDays = (from: string, to: string): string[] => {
  */
 
 export const buildCalendarDay = (
-    day: any,
+    day: BuildableDayInput,
     opts: BuildOpts,
     getWeekKeyFromISODate: (isoDate: string) => string
-) => {
-    // Training existence rules:
-    // - hasTraining is TRUE only if sessions array exists and has length > 0
-    // - BUT we still return training block if includeTraining=true and day.training exists (even if sessions is [])
-    const sessions = day?.training?.sessions ?? null;
+): CalendarDayFull => {
+    const sessions = getTrainingSessions(day.training);
     const hasTraining = Array.isArray(sessions) && sessions.length > 0;
 
-    const s = day?.sleep ?? null;
-    const hasSleep =
-        !!s &&
-        (s.timeAsleepMinutes != null ||
-            s.score != null ||
-            s.awakeMinutes != null ||
-            s.remMinutes != null ||
-            s.coreMinutes != null ||
-            s.deepMinutes != null);
+    const hasSleep = hasMeaningfulSleep(day.sleep ?? null);
+    const hasPlanned = hasMeaningfulPlannedRoutine(day.plannedRoutine ?? null);
 
-    const pr = day?.plannedRoutine ?? null;
-    const hasPlanned =
-        !!pr &&
-        (typeof pr.sessionType === "string" && pr.sessionType.trim().length > 0 ||
-            typeof pr.focus === "string" && pr.focus.trim().length > 0 ||
-            (Array.isArray(pr.exercises) && pr.exercises.length > 0));
+    const sleepSummary = opts.includeSummaries
+        ? computeSleepSummary(day)
+        : undefined;
 
-    const sleepSummary = opts.includeSummaries ? computeSleepSummary(day) : undefined;
-    const trainingSummary = opts.includeSummaries ? computeTrainingSummary(day) : undefined;
+    const trainingSummary = opts.includeSummaries
+        ? computeTrainingSummary(day)
+        : undefined;
 
-    const trainingTotals = opts.includeTotals ? computeTrainingTotals(day) : undefined;
-    const trainingTypes = opts.includeTypes ? computeTrainingTypes(day) : undefined;
+    const trainingTotals = opts.includeTotals
+        ? computeTrainingTotals(day)
+        : undefined;
+
+    const trainingTypes = opts.includeTypes
+        ? computeTrainingTypes(day)
+        : undefined;
 
     const full: CalendarDayFull = {
         date: day.date,
-        weekKey: day.weekKey ?? getWeekKeyFromISODate(day.date),
+        weekKey:
+            day.weekKey ??
+            (typeof day.date === "string" ? getWeekKeyFromISODate(day.date) : undefined),
 
         hasSleep,
         hasTraining,
+        hasPlanned:
+            typeof day.hasPlanned === "boolean" ? day.hasPlanned : hasPlanned,
 
         plannedRoutine: day.plannedRoutine ?? null,
         plannedMeta: day.plannedMeta ?? null,
-
-        // Optional helper flag (CalendarDayFull allows extra fields via pickFields anyway)
-        // If you don't want this, remove it and nothing breaks.
-        ...(typeof (day as any)?.hasPlanned === "boolean" ? { hasPlanned: (day as any).hasPlanned } : { hasPlanned }),
 
         sleep: opts.includeSleep ? day.sleep ?? null : undefined,
         training: opts.includeTraining ? day.training ?? null : undefined,
@@ -432,51 +664,43 @@ export const buildCalendarDay = (
         sleepSummary: sleepSummary ?? null,
         trainingSummary: trainingSummary ?? null,
 
-        // stable outputs for field-picking; if not included, still compute so existing clients won't break
         trainingTotals: trainingTotals ?? computeTrainingTotals(day),
         trainingTypes: trainingTypes ?? computeTrainingTypes(day),
     };
 
-    // includeRaw=false means strip raw blobs inside sleep/training
     if (!opts.includeRaw) {
-        if (full.sleep && typeof full.sleep === "object") {
-            full.sleep = { ...(full.sleep as any), raw: null };
+        if (full.sleep) {
+            full.sleep = {
+                ...full.sleep,
+                raw: null,
+            };
         }
 
-        if (full.training && typeof full.training === "object") {
-            const t = full.training as any;
-
-            // Always null raw
-            full.training = { ...t, raw: null };
-
-            // Normalize sessions to [] for output if it is null (optional)
-            // BUT: we should not change semantics inside stored DB, only output shaping.
-            const outT = full.training as any;
-            if (outT.sessions == null) {
-                // keep null as-is to preserve exact state if client cares
-                // If you prefer always array in responses, change this to `outT.sessions = []`
-            }
-
-            // Ensure session meta exists
-            if (Array.isArray(outT.sessions)) {
-                outT.sessions = outT.sessions.map((sess: any) => ({
-                    ...sess,
-                    meta: sess.meta ?? null,
-                    media: Array.isArray(sess.media) ? sess.media : [],
-                }));
-            }
+        if (full.training) {
+            full.training = stripTrainingRawForOutput(full.training);
         }
     }
 
-    if (!opts.includeSleep) delete (full as any).sleep;
-    if (!opts.includeTraining) delete (full as any).training;
+    if (!opts.includeSleep) {
+        delete full.sleep;
+    }
+
+    if (!opts.includeTraining) {
+        delete full.training;
+    }
 
     if (!opts.includeSummaries) {
-        delete (full as any).sleepSummary;
-        delete (full as any).trainingSummary;
+        delete full.sleepSummary;
+        delete full.trainingSummary;
     }
-    if (!opts.includeTotals) delete (full as any).trainingTotals;
-    if (!opts.includeTypes) delete (full as any).trainingTypes;
+
+    if (!opts.includeTotals) {
+        delete full.trainingTotals;
+    }
+
+    if (!opts.includeTypes) {
+        delete full.trainingTypes;
+    }
 
     return full;
 };
@@ -487,8 +711,10 @@ export const buildCalendarDay = (
  * =========================================================
  */
 
-export const rollupFromDays = (days: any[], getWeekKeyFromISODate: (isoDate: string) => string) => {
-    // duration-weighted avgHr + cadence
+export const rollupFromDays = (
+    days: BuildableDayInput[],
+    getWeekKeyFromISODate: (isoDate: string) => string
+) => {
     let hrWeightedSum = 0;
     let hrWeight = 0;
 
@@ -496,30 +722,12 @@ export const rollupFromDays = (days: any[], getWeekKeyFromISODate: (isoDate: str
     let cadenceWeight = 0;
 
     let paceWeightedSum = 0;
-    let paceWeight = 0; // distance weighting
+    let paceWeight = 0;
 
-    // totals
-    const totals: CalendarTotals = {
-        totalSessions: 0,
+    const totals: CalendarTotals = buildEmptyCalendarTotals();
 
-        totalDurationSeconds: null,
-        totalActiveKcal: null,
-        totalKcal: null,
+    const typeAccumulatorMap = new Map<string, TrainingTypeAccumulator>();
 
-        totalDistanceKm: null,
-        totalSteps: null,
-        totalElevationGainM: null,
-
-        avgHr: null,
-        maxHr: null,
-
-        avgPaceSecPerKm: null,
-        avgCadenceRpm: null,
-    };
-
-    const typeAgg = new Map<string, any>();
-
-    // sleep averages
     let daysWithSleep = 0;
     let sleepTimeSum = 0;
     let sleepTimeCount = 0;
@@ -534,158 +742,180 @@ export const rollupFromDays = (days: any[], getWeekKeyFromISODate: (isoDate: str
     let deepSum = 0;
     let deepCount = 0;
 
-    for (const d of days) {
-        // ---- Sleep ----
-        if (d.sleep) {
-            const s = d.sleep;
-            const hasAny =
-                s.timeAsleepMinutes != null ||
-                s.score != null ||
-                s.awakeMinutes != null ||
-                s.remMinutes != null ||
-                s.coreMinutes != null ||
-                s.deepMinutes != null;
+    for (const day of days) {
+        if (hasMeaningfulSleep(day.sleep ?? null) && day.sleep) {
+            daysWithSleep += 1;
 
-            if (hasAny) daysWithSleep++;
+            if (day.sleep.timeAsleepMinutes != null) {
+                sleepTimeSum += day.sleep.timeAsleepMinutes;
+                sleepTimeCount += 1;
+            }
 
-            if (s.timeAsleepMinutes != null) {
-                sleepTimeSum += s.timeAsleepMinutes;
-                sleepTimeCount++;
+            if (day.sleep.score != null) {
+                sleepScoreSum += day.sleep.score;
+                sleepScoreCount += 1;
             }
-            if (s.score != null) {
-                sleepScoreSum += s.score;
-                sleepScoreCount++;
+
+            if (day.sleep.awakeMinutes != null) {
+                awakeSum += day.sleep.awakeMinutes;
+                awakeCount += 1;
             }
-            if (s.awakeMinutes != null) {
-                awakeSum += s.awakeMinutes;
-                awakeCount++;
+
+            if (day.sleep.remMinutes != null) {
+                remSum += day.sleep.remMinutes;
+                remCount += 1;
             }
-            if (s.remMinutes != null) {
-                remSum += s.remMinutes;
-                remCount++;
+
+            if (day.sleep.coreMinutes != null) {
+                coreSum += day.sleep.coreMinutes;
+                coreCount += 1;
             }
-            if (s.coreMinutes != null) {
-                coreSum += s.coreMinutes;
-                coreCount++;
-            }
-            if (s.deepMinutes != null) {
-                deepSum += s.deepMinutes;
-                deepCount++;
+
+            if (day.sleep.deepMinutes != null) {
+                deepSum += day.sleep.deepMinutes;
+                deepCount += 1;
             }
         }
 
-        const sessions = d.training?.sessions ?? null;
-        if (!Array.isArray(sessions) || sessions.length === 0) continue;
+        const sessions = getTrainingSessions(day.training);
+        if (!sessions || sessions.length === 0) {
+            continue;
+        }
 
-        for (const s of sessions) {
+        for (const session of sessions) {
             totals.totalSessions += 1;
 
-            totals.totalDurationSeconds = addNullable(totals.totalDurationSeconds, s.durationSeconds ?? null);
-            totals.totalActiveKcal = addNullable(totals.totalActiveKcal, s.activeKcal ?? null);
-            totals.totalKcal = addNullable(totals.totalKcal, s.totalKcal ?? null);
+            totals.totalDurationSeconds = addNullable(
+                totals.totalDurationSeconds,
+                session.durationSeconds ?? null
+            );
+            totals.totalActiveKcal = addNullable(
+                totals.totalActiveKcal,
+                session.activeKcal ?? null
+            );
+            totals.totalKcal = addNullable(totals.totalKcal, session.totalKcal ?? null);
 
-            totals.totalDistanceKm = addNullable(totals.totalDistanceKm, s.distanceKm ?? null);
-            totals.totalSteps = addNullable(totals.totalSteps, s.steps ?? null);
-            totals.totalElevationGainM = addNullable(totals.totalElevationGainM, s.elevationGainM ?? null);
+            totals.totalDistanceKm = addNullable(
+                totals.totalDistanceKm,
+                session.distanceKm ?? null
+            );
+            totals.totalSteps = addNullable(
+                totals.totalSteps,
+                session.steps ?? null
+            );
+            totals.totalElevationGainM = addNullable(
+                totals.totalElevationGainM,
+                session.elevationGainM ?? null
+            );
 
-            if (isNumber(s.maxHr)) {
-                totals.maxHr = totals.maxHr === null ? s.maxHr : Math.max(totals.maxHr, s.maxHr);
+            if (isNumber(session.maxHr)) {
+                totals.maxHr =
+                    totals.maxHr === null
+                        ? session.maxHr
+                        : Math.max(totals.maxHr, session.maxHr);
             }
 
-            const dur = isNumber(s.durationSeconds) ? s.durationSeconds : 0;
-            if (isNumber(s.avgHr) && dur > 0) {
-                hrWeightedSum += s.avgHr * dur;
-                hrWeight += dur;
-            }
-            if (isNumber(s.cadenceRpm) && dur > 0) {
-                cadenceWeightedSum += s.cadenceRpm * dur;
-                cadenceWeight += dur;
-            }
+            const durationWeight = isNumber(session.durationSeconds)
+                ? session.durationSeconds
+                : 0;
 
-            const dist = isNumber(s.distanceKm) ? s.distanceKm : 0;
-            if (isNumber(s.paceSecPerKm) && dist > 0) {
-                paceWeightedSum += s.paceSecPerKm * dist;
-                paceWeight += dist;
+            if (isNumber(session.avgHr) && durationWeight > 0) {
+                hrWeightedSum += session.avgHr * durationWeight;
+                hrWeight += durationWeight;
             }
 
-            const type = String(s.type ?? "Unknown");
-            if (!typeAgg.has(type)) {
-                typeAgg.set(type, {
-                    type,
-                    sessions: 0,
-                    totalDurationSeconds: null,
-                    totalActiveKcal: null,
-                    totalKcal: null,
-                    totalDistanceKm: null,
-                    totalSteps: null,
-                    totalElevationGainM: null,
-                    maxHr: null as number | null,
-                    hrWeightedSum: 0,
-                    hrWeight: 0,
-                    cadenceWeightedSum: 0,
-                    cadenceWeight: 0,
-                    paceWeightedSum: 0,
-                    paceWeight: 0,
-                });
+            if (isNumber(session.cadenceRpm) && durationWeight > 0) {
+                cadenceWeightedSum += session.cadenceRpm * durationWeight;
+                cadenceWeight += durationWeight;
             }
 
-            const agg = typeAgg.get(type);
-            agg.sessions += 1;
+            const distanceWeight = isNumber(session.distanceKm)
+                ? session.distanceKm
+                : 0;
 
-            agg.totalDurationSeconds = addNullable(agg.totalDurationSeconds, s.durationSeconds ?? null);
-            agg.totalActiveKcal = addNullable(agg.totalActiveKcal, s.activeKcal ?? null);
-            agg.totalKcal = addNullable(agg.totalKcal, s.totalKcal ?? null);
-
-            agg.totalDistanceKm = addNullable(agg.totalDistanceKm, s.distanceKm ?? null);
-            agg.totalSteps = addNullable(agg.totalSteps, s.steps ?? null);
-            agg.totalElevationGainM = addNullable(agg.totalElevationGainM, s.elevationGainM ?? null);
-
-            if (isNumber(s.maxHr)) {
-                agg.maxHr = agg.maxHr === null ? s.maxHr : Math.max(agg.maxHr, s.maxHr);
+            if (isNumber(session.paceSecPerKm) && distanceWeight > 0) {
+                paceWeightedSum += session.paceSecPerKm * distanceWeight;
+                paceWeight += distanceWeight;
             }
 
-            if (isNumber(s.avgHr) && dur > 0) {
-                agg.hrWeightedSum += s.avgHr * dur;
-                agg.hrWeight += dur;
+            const type = String(session.type ?? "Unknown");
+
+            if (!typeAccumulatorMap.has(type)) {
+                typeAccumulatorMap.set(type, createTrainingTypeAccumulator(type));
             }
-            if (isNumber(s.cadenceRpm) && dur > 0) {
-                agg.cadenceWeightedSum += s.cadenceRpm * dur;
-                agg.cadenceWeight += dur;
+
+            const accumulator = typeAccumulatorMap.get(type);
+            if (!accumulator) {
+                continue;
             }
-            if (isNumber(s.paceSecPerKm) && dist > 0) {
-                agg.paceWeightedSum += s.paceSecPerKm * dist;
-                agg.paceWeight += dist;
+
+            accumulator.sessions += 1;
+
+            accumulator.totalDurationSeconds = addNullable(
+                accumulator.totalDurationSeconds,
+                session.durationSeconds ?? null
+            );
+            accumulator.totalActiveKcal = addNullable(
+                accumulator.totalActiveKcal,
+                session.activeKcal ?? null
+            );
+            accumulator.totalKcal = addNullable(
+                accumulator.totalKcal,
+                session.totalKcal ?? null
+            );
+
+            accumulator.totalDistanceKm = addNullable(
+                accumulator.totalDistanceKm,
+                session.distanceKm ?? null
+            );
+            accumulator.totalSteps = addNullable(
+                accumulator.totalSteps,
+                session.steps ?? null
+            );
+            accumulator.totalElevationGainM = addNullable(
+                accumulator.totalElevationGainM,
+                session.elevationGainM ?? null
+            );
+
+            if (isNumber(session.maxHr)) {
+                accumulator.maxHr =
+                    accumulator.maxHr === null
+                        ? session.maxHr
+                        : Math.max(accumulator.maxHr, session.maxHr);
+            }
+
+            if (isNumber(session.avgHr) && durationWeight > 0) {
+                accumulator.hrWeightedSum += session.avgHr * durationWeight;
+                accumulator.hrWeight += durationWeight;
+            }
+
+            if (isNumber(session.cadenceRpm) && durationWeight > 0) {
+                accumulator.cadenceWeightedSum += session.cadenceRpm * durationWeight;
+                accumulator.cadenceWeight += durationWeight;
+            }
+
+            if (isNumber(session.paceSecPerKm) && distanceWeight > 0) {
+                accumulator.paceWeightedSum += session.paceSecPerKm * distanceWeight;
+                accumulator.paceWeight += distanceWeight;
             }
         }
     }
 
     totals.avgHr = hrWeight > 0 ? round1(hrWeightedSum / hrWeight) : null;
-    totals.avgCadenceRpm = cadenceWeight > 0 ? round1(cadenceWeightedSum / cadenceWeight) : null;
-    totals.avgPaceSecPerKm = paceWeight > 0 ? round1(paceWeightedSum / paceWeight) : null;
+    totals.avgCadenceRpm =
+        cadenceWeight > 0 ? round1(cadenceWeightedSum / cadenceWeight) : null;
+    totals.avgPaceSecPerKm =
+        paceWeight > 0 ? round1(paceWeightedSum / paceWeight) : null;
 
-    const trainingTypes: TrainingTypeTotals[] = Array.from(typeAgg.values()).map((agg) => ({
-        type: agg.type,
-        sessions: agg.sessions,
+    const trainingTypes = Array.from(typeAccumulatorMap.values())
+        .map((accumulator) => toTrainingTypeTotals(accumulator))
+        .sort((a, b) => {
+            if (b.sessions !== a.sessions) {
+                return b.sessions - a.sessions;
+            }
 
-        totalDurationSeconds: agg.totalDurationSeconds,
-        totalActiveKcal: agg.totalActiveKcal,
-        totalKcal: agg.totalKcal,
-
-        totalDistanceKm: agg.totalDistanceKm,
-        totalSteps: agg.totalSteps,
-        totalElevationGainM: agg.totalElevationGainM,
-
-        avgHr: agg.hrWeight > 0 ? round1(agg.hrWeightedSum / agg.hrWeight) : null,
-        maxHr: agg.maxHr,
-
-        avgPaceSecPerKm: agg.paceWeight > 0 ? round1(agg.paceWeightedSum / agg.paceWeight) : null,
-        avgCadenceRpm: agg.cadenceWeight > 0 ? round1(agg.cadenceWeightedSum / agg.cadenceWeight) : null,
-    }));
-
-    trainingTypes.sort((a, b) => {
-        if (b.sessions !== a.sessions) return b.sessions - a.sessions;
-        return a.type.localeCompare(b.type);
-    });
+            return a.type.localeCompare(b.type);
+        });
 
     const sleepAverages = {
         daysWithSleep,
@@ -698,7 +928,12 @@ export const rollupFromDays = (days: any[], getWeekKeyFromISODate: (isoDate: str
     };
 
     void getWeekKeyFromISODate;
-    return { trainingTotals: totals, trainingTypes, sleepAverages };
+
+    return {
+        trainingTotals: totals,
+        trainingTypes,
+        sleepAverages,
+    };
 };
 
 /**
@@ -710,35 +945,47 @@ export const rollupFromDays = (days: any[], getWeekKeyFromISODate: (isoDate: str
 const WEEK_KEY_REGEX = /^(\d{4})-W(\d{2})$/;
 
 export const parseWeekKey = (weekKey: string): { year: number; week: number } => {
-    const m = WEEK_KEY_REGEX.exec(weekKey);
-    if (!m) {
+    const match = WEEK_KEY_REGEX.exec(weekKey);
+
+    if (!match) {
         throw new Error(`Invalid weekKey "${weekKey}". Expected format: YYYY-W##`);
     }
-    const year = Number(m[1]);
-    const week = Number(m[2]);
+
+    const year = Number(match[1]);
+    const week = Number(match[2]);
+
     if (!Number.isFinite(year) || !Number.isFinite(week) || week < 1 || week > 53) {
         throw new Error(`Invalid weekKey "${weekKey}". Week must be 01..53`);
     }
+
     return { year, week };
 };
 
 // ISO week start (Monday) for a given year/week in UTC
 export const isoWeekStart = (year: number, week: number): Date => {
     const jan4 = new Date(Date.UTC(year, 0, 4));
-    const day = jan4.getUTCDay() || 7; // Mon=1..Sun=7
+    const day = jan4.getUTCDay() || 7;
     const mondayWeek1 = new Date(jan4);
-    mondayWeek1.setUTCDate(jan4.getUTCDate() - (day - 1)); // Monday of week 1
+
+    mondayWeek1.setUTCDate(jan4.getUTCDate() - (day - 1));
+
     const monday = new Date(mondayWeek1);
     monday.setUTCDate(mondayWeek1.getUTCDate() + (week - 1) * 7);
+
     return monday;
 };
 
-export const toISODate = (d: Date): string => d.toISOString().slice(0, 10);
+export const toISODate = (date: Date): string => date.toISOString().slice(0, 10);
 
 export const getWeekRangeFromKey = (weekKey: string): WeekRange => {
     const { year, week } = parseWeekKey(weekKey);
     const start = isoWeekStart(year, week);
     const end = new Date(start);
+
     end.setUTCDate(start.getUTCDate() + 6);
-    return { from: toISODate(start), to: toISODate(end) };
+
+    return {
+        from: toISODate(start),
+        to: toISODate(end),
+    };
 };

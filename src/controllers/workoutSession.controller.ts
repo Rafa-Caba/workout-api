@@ -69,6 +69,7 @@ export const createSession: RequestHandler = async (req, res: Response) => {
 
     const payload: CreateTrainingSessionInput = typedReq.validatedBody ?? {
         type: "",
+        activityType: null,
         startAt: null,
         endAt: null,
         durationSeconds: null,
@@ -81,6 +82,9 @@ export const createSession: RequestHandler = async (req, res: Response) => {
         elevationGainM: null,
         paceSecPerKm: null,
         cadenceRpm: null,
+        hasRoute: false,
+        outdoorMetrics: null,
+        routeSummary: null,
         effortRpe: null,
         notes: null,
         meta: null,
@@ -88,6 +92,8 @@ export const createSession: RequestHandler = async (req, res: Response) => {
     };
 
     const out = await createTrainingSession(userId, date, payload, returnMode);
+
+    console.log({ out });
 
     if (isErrorResult(out)) {
         const status = out.error.code === "NOT_FOUND" ? 404 : 400;

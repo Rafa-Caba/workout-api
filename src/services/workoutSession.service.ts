@@ -1,3 +1,5 @@
+// src/services/workoutSession.service.ts
+
 import mongoose from "mongoose";
 import type { HydratedDocument } from "mongoose";
 import { WorkoutDayModel, type WorkoutDayDocument } from "../models/WorkoutDay.model";
@@ -125,6 +127,22 @@ const ensureTrainingBlock = (dayDoc: WorkoutDayHydrated): void => {
     }
 };
 
+/**
+ * Create payload should always be canonical so old gym/manual sessions
+ * do not depend on undefined values for the new outdoor fields.
+ */
+const withCreateSessionDefaults = (
+    payload: CreateTrainingSessionInput
+): CreateTrainingSessionInput => {
+    return {
+        ...payload,
+        activityType: payload.activityType ?? null,
+        hasRoute: payload.hasRoute ?? false,
+        outdoorMetrics: payload.outdoorMetrics ?? null,
+        routeSummary: payload.routeSummary ?? null,
+    };
+};
+
 export const createTrainingSession = async (
     userId: string,
     date: string,
@@ -144,13 +162,19 @@ export const createTrainingSession = async (
 
     ensureTrainingBlock(dayDoc);
 
+    const sessionPayload = withCreateSessionDefaults(payload);
+
     dayDoc.training?.sessions?.push({
-        ...payload,
+        ...sessionPayload,
         media: null,
     });
 
     const saved = await dayDoc.save();
+
     const outDay = toWorkoutDayJson(saved);
+
+    console.log({ outDay });
+    console.log({ outDay: outDay.training?.sessions });
 
     const savedSessions = getSessions(saved);
     const createdSessionId =

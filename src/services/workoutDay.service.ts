@@ -38,6 +38,11 @@ import type {
     WorkoutDayBackfillResult,
     WorkoutSessionKind,
 } from "../types/workoutDay.types";
+import type {
+    OutdoorActivityType,
+    WorkoutOutdoorMetrics,
+    WorkoutRouteSummary,
+} from "../types/outdoorSession.types";
 
 type WorkoutDayUpsertPayload = UpsertArgs["payload"];
 
@@ -96,6 +101,10 @@ const toNullableString = (value: unknown): string | null => {
     return typeof value === "string" ? value : null;
 };
 
+const toNullableBoolean = (value: unknown): boolean | null => {
+    return typeof value === "boolean" ? value : null;
+};
+
 const toNullableStringArray = (value: unknown): string[] | null => {
     if (value === null) return null;
     if (!Array.isArray(value)) return null;
@@ -119,7 +128,11 @@ const toNullableWorkoutDataSource = (value: unknown): WorkoutDataSource | null =
 };
 
 const toNullableWorkoutSessionKind = (value: unknown): WorkoutSessionKind | null => {
-    return value === "device-import" || value === "gym-check" ? value : null;
+    return value === "device-import" || value === "gym-check" || value === "manual-outdoor" ? value : null;
+};
+
+const toNullableOutdoorActivityType = (value: unknown): OutdoorActivityType | null => {
+    return value === "walking" || value === "running" ? value : null;
 };
 
 const toExerciseSetUnit = (value: unknown): "lb" | "kg" => {
@@ -203,11 +216,63 @@ const normalizeTrainingSessionMeta = (value: unknown): TrainingSessionMeta | nul
     if (!isPlainObject(value)) return null;
 
     return {
+        sessionKey: toNullableString(value.sessionKey),
+        trainingSource: toNullableString(value.trainingSource),
+        dayEffortRpe: toNullableNumber(value.dayEffortRpe),
+
         source: toNullableWorkoutDataSource(value.source),
         sourceDevice: toNullableString(value.sourceDevice),
         importedAt: toNullableString(value.importedAt),
         lastSyncedAt: toNullableString(value.lastSyncedAt),
         sessionKind: toNullableWorkoutSessionKind(value.sessionKind),
+
+        externalId: toNullableString(value.externalId),
+        originalType: toNullableString(value.originalType),
+        provider: toNullableString(value.provider),
+    };
+};
+
+const normalizeWorkoutOutdoorMetrics = (value: unknown): WorkoutOutdoorMetrics | null => {
+    if (value === null) return null;
+    if (!isPlainObject(value)) return null;
+
+    return {
+        distanceKm: toNullableNumber(value.distanceKm),
+        steps: toNullableNumber(value.steps),
+        elevationGainM: toNullableNumber(value.elevationGainM),
+
+        paceSecPerKm: toNullableNumber(value.paceSecPerKm),
+        avgSpeedKmh: toNullableNumber(value.avgSpeedKmh),
+        maxSpeedKmh: toNullableNumber(value.maxSpeedKmh),
+
+        cadenceRpm: toNullableNumber(value.cadenceRpm),
+        strideLengthM: toNullableNumber(value.strideLengthM),
+    };
+};
+
+const normalizeWorkoutRouteSummary = (value: unknown): WorkoutRouteSummary | null => {
+    if (value === null) return null;
+    if (!isPlainObject(value)) return null;
+
+    const pointCount = toNullableNumber(value.pointCount);
+    if (pointCount === null) {
+        return null;
+    }
+
+    return {
+        pointCount: Math.max(0, Math.trunc(pointCount)),
+
+        startLatitude: toNullableNumber(value.startLatitude),
+        startLongitude: toNullableNumber(value.startLongitude),
+
+        endLatitude: toNullableNumber(value.endLatitude),
+        endLongitude: toNullableNumber(value.endLongitude),
+
+        minLatitude: toNullableNumber(value.minLatitude),
+        maxLatitude: toNullableNumber(value.maxLatitude),
+
+        minLongitude: toNullableNumber(value.minLongitude),
+        maxLongitude: toNullableNumber(value.maxLongitude),
     };
 };
 
@@ -225,6 +290,7 @@ const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
     return {
         id,
         type,
+        activityType: toNullableOutdoorActivityType(value.activityType),
         startAt: toNullableString(value.startAt),
         endAt: toNullableString(value.endAt),
         durationSeconds: toNullableNumber(value.durationSeconds),
@@ -237,6 +303,9 @@ const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
         elevationGainM: toNullableNumber(value.elevationGainM),
         paceSecPerKm: toNullableNumber(value.paceSecPerKm),
         cadenceRpm: toNullableNumber(value.cadenceRpm),
+        hasRoute: toNullableBoolean(value.hasRoute) ?? false,
+        outdoorMetrics: normalizeWorkoutOutdoorMetrics(value.outdoorMetrics),
+        routeSummary: normalizeWorkoutRouteSummary(value.routeSummary),
         effortRpe: toNullableNumber(value.effortRpe),
         notes: toNullableString(value.notes),
         meta: normalizeTrainingSessionMeta(value.meta),

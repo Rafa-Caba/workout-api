@@ -16,32 +16,50 @@ export const weekKeySchema = z
     .string()
     .regex(/^\d{4}-W\d{2}$/, "Expected weekKey format: YYYY-W##");
 
-const boolFromQuery = z.preprocess((v) => {
-    if (typeof v === "boolean") return v;
-    if (typeof v === "string") {
-        const s = v.trim().toLowerCase();
-        if (s === "true" || s === "1" || s === "yes" || s === "on") return true;
-        if (s === "false" || s === "0" || s === "no" || s === "off") return false;
+const boolFromQuery = z.preprocess((value: unknown) => {
+    if (typeof value === "boolean") {
+        return value;
     }
-    return v;
+
+    if (typeof value === "string") {
+        const normalizedValue = value.trim().toLowerCase();
+
+        if (["true", "1", "yes", "on"].includes(normalizedValue)) {
+            return true;
+        }
+
+        if (["false", "0", "no", "off"].includes(normalizedValue)) {
+            return false;
+        }
+    }
+
+    return value;
 }, z.boolean());
 
 const numberFromQuery = z.coerce.number();
 
 const intFromQuery = numberFromQuery
-    .refine((n) => Number.isFinite(n), "Expected a finite number")
-    .refine((n) => Number.isInteger(n), "Expected an integer");
+    .refine((value) => Number.isFinite(value), "Expected a finite number")
+    .refine((value) => Number.isInteger(value), "Expected an integer");
 
-const nonNegIntFromQuery = intFromQuery.refine((n) => n >= 0, "Expected >= 0");
+const nonNegIntFromQuery = intFromQuery.refine((value) => value >= 0, "Expected >= 0");
+
 const nonNegNumFromQuery = numberFromQuery
-    .refine((n) => Number.isFinite(n), "Expected a finite number")
-    .refine((n) => n >= 0, "Expected >= 0");
+    .refine((value) => Number.isFinite(value), "Expected a finite number")
+    .refine((value) => value >= 0, "Expected >= 0");
 
 const recordUnknown = z.record(z.string(), z.unknown());
 const recordUnknownNullable = recordUnknown.nullable();
 
 const workoutDataSourceSchema = z.enum(["manual", "healthkit", "health-connect"]);
-const workoutSessionKindSchema = z.enum(["device-import", "gym-check"]);
+const workoutSessionKindSchema = z.enum(["device-import", "gym-check", "manual-outdoor"]);
+const outdoorActivityTypeSchema = z.enum(["walking", "running"]);
+
+/**
+ * =========================================================
+ * Params / query
+ * =========================================================
+ */
 
 export const dayParamsSchema = z.object({
     date: isoDateSchema,
@@ -64,14 +82,15 @@ export const backfillDayQuerySchema = z.object({
     mode: z.enum(["merge", "replace"]).optional(),
 });
 
-const fieldsSchema = z.preprocess((v) => {
-    if (typeof v === "string") {
-        return v
+const fieldsSchema = z.preprocess((value: unknown) => {
+    if (typeof value === "string") {
+        return value
             .split(",")
-            .map((s) => s.trim())
+            .map((item) => item.trim())
             .filter(Boolean);
     }
-    return v;
+
+    return value;
 }, z.array(z.string()).optional());
 
 export const rangeQuerySchema = z.object({
@@ -127,6 +146,12 @@ export const attachSessionMediaQuerySchema = z.object({
     returnMode: z.enum(["day", "session"]).optional(),
 });
 
+/**
+ * =========================================================
+ * Shared small bodies
+ * =========================================================
+ */
+
 const attachMediaItemSchema = z
     .object({
         publicId: z.string().min(1).max(300),
@@ -144,12 +169,18 @@ export const attachSessionMediaBodySchema = z
     })
     .strict();
 
+/**
+ * =========================================================
+ * Sleep
+ * =========================================================
+ */
+
 const sleepSchema = z
     .object({
         timeAsleepMinutes: nonNegIntFromQuery.nullable().optional(),
         timeInBedMinutes: nonNegIntFromQuery.nullable().optional(),
         score: nonNegIntFromQuery
-            .refine((n) => n <= 100, "Expected <= 100")
+            .refine((value) => value <= 100, "Expected <= 100")
             .nullable()
             .optional(),
 
@@ -167,6 +198,12 @@ const sleepSchema = z
     })
     .strict();
 
+/**
+ * =========================================================
+ * Media / exercise
+ * =========================================================
+ */
+
 const mediaItemSchema = z
     .object({
         publicId: z.string().min(1),
@@ -182,7 +219,7 @@ const setUnitSchema = z.enum(["lb", "kg"]);
 
 const exerciseSetSchema = z
     .object({
-        setIndex: intFromQuery.refine((n) => n >= 1, "Expected >= 1"),
+        setIndex: intFromQuery.refine((value) => value >= 1, "Expected >= 1"),
         reps: nonNegIntFromQuery.nullable().optional(),
         weight: nonNegNumFromQuery.nullable().optional(),
         unit: setUnitSchema,
@@ -210,29 +247,94 @@ const exerciseSchema = z
             .min(1, "Expected at least 1 set")
             .superRefine((sets, ctx) => {
                 const seen = new Set<number>();
-                for (let i = 0; i < sets.length; i++) {
-                    const idx = sets[i].setIndex;
-                    if (seen.has(idx)) {
+
+                for (let index = 0; index < sets.length; index += 1) {
+                    const setIndex = sets[index].setIndex;
+
+                    if (seen.has(setIndex)) {
                         ctx.addIssue({
                             code: z.ZodIssueCode.custom,
-                            message: `Duplicate setIndex: ${idx}`,
-                            path: [i, "setIndex"],
+                            message: `Duplicate setIndex: ${setIndex}`,
+                            path: [index, "setIndex"],
                         });
                     }
-                    seen.add(idx);
+
+                    seen.add(setIndex);
                 }
             }),
         meta: recordUnknownNullable.optional(),
     })
     .strict();
 
+/**
+ * =========================================================
+ * Outdoor session helpers
+ * =========================================================
+ */
+
+const workoutOutdoorMetricsSchema = z
+    .object({
+        distanceKm: nonNegNumFromQuery.nullable().optional(),
+        steps: nonNegIntFromQuery.nullable().optional(),
+        elevationGainM: nonNegNumFromQuery.nullable().optional(),
+
+        paceSecPerKm: nonNegNumFromQuery.nullable().optional(),
+        avgSpeedKmh: nonNegNumFromQuery.nullable().optional(),
+        maxSpeedKmh: nonNegNumFromQuery.nullable().optional(),
+
+        cadenceRpm: nonNegNumFromQuery.nullable().optional(),
+        strideLengthM: nonNegNumFromQuery.nullable().optional(),
+    })
+    .strict();
+
+const workoutRouteSummarySchema = z
+    .object({
+        pointCount: nonNegIntFromQuery,
+
+        startLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+        startLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+
+        endLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+        endLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+
+        minLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+        maxLatitude: z.coerce.number().min(-90).max(90).nullable().optional(),
+
+        minLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+        maxLongitude: z.coerce.number().min(-180).max(180).nullable().optional(),
+    })
+    .strict();
+
+/**
+ * =========================================================
+ * Training
+ * =========================================================
+ */
+
 const trainingSessionMetaSchema = z
     .object({
+        /**
+         * Existing GymCheck / FE flow fields
+         */
+        sessionKey: z.string().max(120).nullable().optional(),
+        trainingSource: z.string().max(120).nullable().optional(),
+        dayEffortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
+
+        /**
+         * Health-enriched metadata fields
+         */
         source: workoutDataSourceSchema.nullable().optional(),
         sourceDevice: z.string().max(200).nullable().optional(),
         importedAt: z.string().max(60).nullable().optional(),
         lastSyncedAt: z.string().max(60).nullable().optional(),
         sessionKind: workoutSessionKindSchema.nullable().optional(),
+
+        /**
+         * Optional useful metadata helpers
+         */
+        externalId: z.string().max(200).nullable().optional(),
+        originalType: z.string().max(200).nullable().optional(),
+        provider: z.string().max(120).nullable().optional(),
     })
     .strict();
 
@@ -241,6 +343,8 @@ const trainingSessionSchema = z
         id: z.string().min(1).optional(),
         type: z.string().min(1),
 
+        activityType: outdoorActivityTypeSchema.nullable().optional(),
+
         startAt: z.string().nullable().optional(),
         endAt: z.string().nullable().optional(),
 
@@ -248,8 +352,14 @@ const trainingSessionSchema = z
         activeKcal: nonNegIntFromQuery.nullable().optional(),
         totalKcal: nonNegIntFromQuery.nullable().optional(),
 
-        avgHr: nonNegIntFromQuery.refine((n) => n <= 300, "Expected <= 300").nullable().optional(),
-        maxHr: nonNegIntFromQuery.refine((n) => n <= 300, "Expected <= 300").nullable().optional(),
+        avgHr: nonNegIntFromQuery
+            .refine((value) => value <= 300, "Expected <= 300")
+            .nullable()
+            .optional(),
+        maxHr: nonNegIntFromQuery
+            .refine((value) => value <= 300, "Expected <= 300")
+            .nullable()
+            .optional(),
 
         distanceKm: nonNegNumFromQuery.nullable().optional(),
         steps: nonNegIntFromQuery.nullable().optional(),
@@ -257,6 +367,10 @@ const trainingSessionSchema = z
 
         paceSecPerKm: nonNegNumFromQuery.nullable().optional(),
         cadenceRpm: nonNegNumFromQuery.nullable().optional(),
+
+        hasRoute: z.coerce.boolean().optional(),
+        outdoorMetrics: workoutOutdoorMetricsSchema.nullable().optional(),
+        routeSummary: workoutRouteSummarySchema.nullable().optional(),
 
         effortRpe: numberFromQuery.min(0).max(10).nullable().optional(),
 
@@ -276,6 +390,12 @@ const trainingSchema = z
         raw: recordUnknownNullable.optional(),
     })
     .strict();
+
+/**
+ * =========================================================
+ * Day upsert / backfill
+ * =========================================================
+ */
 
 export const upsertDayBodySchema = z
     .object({
