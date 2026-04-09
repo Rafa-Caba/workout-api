@@ -1,8 +1,10 @@
+// src/app.ts
+// Full app file with workout progress route registered.
+
 import express from "express";
 import cors from "cors";
 import { corsOptions } from "./config/cors";
 import cookieParser from "cookie-parser";
-import env from "./config/env";
 
 import authRoutes from "./routes/auth.routes";
 import adminUserRoutes from "./routes/adminUser.routes";
@@ -15,6 +17,7 @@ import workoutMediaRoutes from "./routes/workoutMedia.routes";
 import workoutRoutineRoutes from "./routes/workoutRoutine.routes";
 import workoutSummaryRoutes from "./routes/workoutSummary.routes";
 import workoutInsightsRoutes from "./routes/workoutInsights.routes";
+import workoutProgressRoutes from "./routes/workoutProgress.routes";
 import workoutExportRoutes from "./routes/workoutExport.routes";
 import movementRoutes from "./routes/movement.routes";
 import settingsRoutes from "./routes/settings.routes";
@@ -42,6 +45,7 @@ app.use("/api/workout", workoutMediaRoutes);
 app.use("/api/workout", workoutRoutineRoutes);
 app.use("/api/workout", workoutSummaryRoutes);
 app.use("/api/workout", workoutInsightsRoutes);
+app.use("/api/workout", workoutProgressRoutes);
 app.use("/api/workout", workoutExportRoutes);
 app.use("/api/app-settings", publicAppSettingsRoutes);
 app.use("/api", movementRoutes);

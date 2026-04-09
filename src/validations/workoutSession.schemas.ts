@@ -62,7 +62,9 @@ const trainingSessionMetaSchema = z
         sourceDevice: z.string().max(200).nullable().optional(),
         importedAt: z.string().max(60).nullable().optional(),
         lastSyncedAt: z.string().max(60).nullable().optional(),
-        sessionKind: z.enum(["device-import", "gym-check", "manual-outdoor"]),
+        sessionKind: z.enum(["device-import", "gym-check", "manual-outdoor"])
+            .nullable()
+            .optional(),
 
         /**
          * Optional useful metadata helpers
