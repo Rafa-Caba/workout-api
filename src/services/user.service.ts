@@ -1,7 +1,9 @@
+// src/services/user.service.ts
 import { UserModel } from "../models/User.model";
 import type { PublicUser } from "../types/auth.types";
 import { toPublicUser } from "../utils/userMapper";
 import { deleteFromCloudinary } from "../utils/cloudinaryDelete";
+import { recordUserWeightMetricFromProfile } from "./userMetric.service";
 
 export type UpdateMePayload = {
     name?: string;
@@ -22,11 +24,16 @@ export type UpdateMePayload = {
     | null;
     timezone?: string | null;
 
-    /**
-     * Baseline training profile (user-owned)
-     */
     trainingLevel?: "BEGINNER" | "INTERMEDIATE" | "ADVANCED" | null;
     healthNotes?: string | null;
+};
+
+const getTodayIsoDate = (): string => {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(now.getUTCDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
 };
 
 export const getUserById = async (userId: string): Promise<PublicUser> => {
@@ -40,8 +47,7 @@ export const getUserById = async (userId: string): Promise<PublicUser> => {
         };
     }
 
-    const json = user.toJSON();
-    return toPublicUser(json);
+    return toPublicUser(user.toJSON());
 };
 
 export const updateMe = async (
@@ -58,28 +64,39 @@ export const updateMe = async (
         };
     }
 
-    // Only update fields provided (undefined means "leave as is")
     if (payload.name !== undefined) user.name = payload.name;
-    if (payload.sex !== undefined) user.sex = payload.sex as any;
+    if (payload.sex !== undefined) user.sex = payload.sex;
 
     if (payload.heightCm !== undefined) user.heightCm = payload.heightCm;
-    if (payload.currentWeightKg !== undefined)
+    if (payload.currentWeightKg !== undefined) {
         user.currentWeightKg = payload.currentWeightKg;
+    }
 
-    if (payload.units !== undefined) user.units = payload.units as any;
+    if (payload.units !== undefined) user.units = payload.units;
 
     if (payload.birthDate !== undefined) user.birthDate = payload.birthDate;
-    if (payload.activityGoal !== undefined)
-        user.activityGoal = payload.activityGoal as any;
+    if (payload.activityGoal !== undefined) user.activityGoal = payload.activityGoal;
     if (payload.timezone !== undefined) user.timezone = payload.timezone;
 
-    // New fields
-    if (payload.trainingLevel !== undefined)
-        (user as any).trainingLevel = payload.trainingLevel;
-    if (payload.healthNotes !== undefined)
-        (user as any).healthNotes = payload.healthNotes;
+    if (payload.trainingLevel !== undefined) {
+        user.trainingLevel = payload.trainingLevel;
+    }
+
+    if (payload.healthNotes !== undefined) {
+        user.healthNotes = payload.healthNotes;
+    }
 
     await user.save();
+
+    if (
+        payload.currentWeightKg !== undefined &&
+        payload.currentWeightKg !== null
+    ) {
+        await recordUserWeightMetricFromProfile(userId, {
+            date: getTodayIsoDate(),
+            weightKg: payload.currentWeightKg,
+        });
+    }
 
     return toPublicUser(user.toJSON());
 };
@@ -105,7 +122,6 @@ export const setMyProfilePic = async (
 
     await user.save();
 
-    // Best-effort delete old image (avoid leaking storage)
     if (prevPublicId && prevPublicId !== input.publicId) {
         await deleteFromCloudinary(prevPublicId, { resourceType: "image" });
     }
