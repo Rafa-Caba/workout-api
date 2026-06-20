@@ -1,4 +1,6 @@
 // src/validations/workoutDay.schemas.ts
+// Schemas de validación para workout days, sleep, training sessions,
+// backfill individual y backfill por rango.
 
 import { z } from "zod";
 
@@ -50,6 +52,13 @@ const nonNegNumFromQuery = numberFromQuery
 
 const recordUnknown = z.record(z.string(), z.unknown());
 const recordUnknownNullable = recordUnknown.nullable();
+
+/**
+ * Raw payloads from HealthKit / Health Connect can be objects, arrays,
+ * strings, numbers, booleans, or null depending on platform/provider.
+ * This is intentionally unknown while still keeping the rest strongly typed.
+ */
+const rawHealthPayloadSchema = z.unknown().nullable();
 
 const workoutDataSourceSchema = z.enum(["manual", "healthkit", "health-connect"]);
 const workoutSessionKindSchema = z.enum(["device-import", "gym-check", "manual-outdoor"]);
@@ -194,7 +203,7 @@ const sleepSchema = z
         importedAt: z.string().max(60).nullable().optional(),
         lastSyncedAt: z.string().max(60).nullable().optional(),
 
-        raw: recordUnknownNullable.optional(),
+        raw: rawHealthPayloadSchema.optional(),
     })
     .strict();
 
@@ -314,14 +323,14 @@ const workoutRouteSummarySchema = z
 const trainingSessionMetaSchema = z
     .object({
         /**
-         * Existing GymCheck / FE flow fields
+         * Existing GymCheck / FE flow fields.
          */
         sessionKey: z.string().max(120).nullable().optional(),
         trainingSource: z.string().max(120).nullable().optional(),
         dayEffortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
 
         /**
-         * Health-enriched metadata fields
+         * Health-enriched metadata fields.
          */
         source: workoutDataSourceSchema.nullable().optional(),
         sourceDevice: z.string().max(200).nullable().optional(),
@@ -330,7 +339,7 @@ const trainingSessionMetaSchema = z
         sessionKind: workoutSessionKindSchema.nullable().optional(),
 
         /**
-         * Optional useful metadata helpers
+         * Optional useful metadata helpers.
          */
         externalId: z.string().max(200).nullable().optional(),
         originalType: z.string().max(200).nullable().optional(),
@@ -349,8 +358,8 @@ const trainingSessionSchema = z
         endAt: z.string().nullable().optional(),
 
         durationSeconds: nonNegIntFromQuery.nullable().optional(),
-        activeKcal: nonNegIntFromQuery.nullable().optional(),
-        totalKcal: nonNegIntFromQuery.nullable().optional(),
+        activeKcal: nonNegNumFromQuery.nullable().optional(),
+        totalKcal: nonNegNumFromQuery.nullable().optional(),
 
         avgHr: nonNegIntFromQuery
             .refine((value) => value <= 300, "Expected <= 300")
@@ -377,8 +386,8 @@ const trainingSessionSchema = z
         notes: z.string().nullable().optional(),
         meta: trainingSessionMetaSchema.nullable().optional(),
 
-        media: z.array(mediaItemSchema).optional(),
-        exercises: z.array(exerciseSchema).optional(),
+        media: z.array(mediaItemSchema).nullable().optional(),
+        exercises: z.array(exerciseSchema).nullable().optional(),
     })
     .strict();
 
@@ -387,7 +396,7 @@ const trainingSchema = z
         sessions: z.array(trainingSessionSchema).nullable().optional(),
         source: workoutDataSourceSchema.nullable().optional(),
         dayEffortRpe: numberFromQuery.min(0).max(10).nullable().optional(),
-        raw: recordUnknownNullable.optional(),
+        raw: rawHealthPayloadSchema.optional(),
     })
     .strict();
 
@@ -414,10 +423,12 @@ export const backfillRangeBodySchema = z
         mode: z.enum(["merge", "replace"]).optional(),
         days: z
             .array(
-                z.object({
-                    date: isoDateSchema,
-                    payload: upsertDayBodySchema,
-                })
+                z
+                    .object({
+                        date: isoDateSchema,
+                        payload: upsertDayBodySchema,
+                    })
+                    .strict()
             )
             .min(1, "Expected at least 1 backfill item")
             .max(366, "Expected at most 366 backfill items"),

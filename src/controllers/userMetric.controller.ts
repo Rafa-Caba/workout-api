@@ -40,7 +40,7 @@ export const upsertMyUserMetricByDateController = async (
     const userId = getUserIdFromReq(req);
     const params = getValidatedParams(req);
 
-    console.log({ boddy: req.body });
+    // console.log({ boddy: req.body });
 
     const out = await userMetricService.upsertMyUserMetricByDate(
         userId,

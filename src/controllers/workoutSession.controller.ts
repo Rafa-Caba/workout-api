@@ -93,7 +93,7 @@ export const createSession: RequestHandler = async (req, res: Response) => {
 
     const out = await createTrainingSession(userId, date, payload, returnMode);
 
-    console.log({ out });
+    // console.log({ out });
 
     if (isErrorResult(out)) {
         const status = out.error.code === "NOT_FOUND" ? 404 : 400;

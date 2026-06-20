@@ -173,8 +173,8 @@ export const createTrainingSession = async (
 
     const outDay = toWorkoutDayJson(saved);
 
-    console.log({ outDay });
-    console.log({ outDay: outDay.training?.sessions });
+    // console.log({ outDay });
+    // console.log({ outDay: outDay.training?.sessions });
 
     const savedSessions = getSessions(saved);
     const createdSessionId =
