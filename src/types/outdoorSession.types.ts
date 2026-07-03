@@ -1,22 +1,30 @@
 // src/types/outdoorSession.types.ts
+// Shared cardio/outdoor session domain types used by WorkoutDay models,
+// services, validators, and future live workout OS sync flows.
 
 /**
- * Central outdoor session types for backend workout module.
- * These types are shared-oriented so they can be reused by:
- * - models
- * - services
- * - controllers
- * - validators / request schemas
- */
-
-/**
- * Supported outdoor activity families for the first module scope.
+ * Supported cardio activity families for the current module scope.
+ * Kept as OutdoorActivityType for backwards compatibility with existing
+ * Outdoor imports; the value itself also supports indoor cardio sessions.
  */
 export type OutdoorActivityType = "walking" | "running";
 
 /**
- * Normalized outdoor metrics persisted on a workout session.
- * Keep this separated from the generic session root shape so the outdoor
+ * Distinguishes GPS-based outdoor workouts from treadmill/indoor sessions.
+ * Old sessions can keep this as null until they are normalized/migrated.
+ */
+export type CardioEnvironment = "outdoor" | "indoor";
+
+/**
+ * Status of writing an app-created workout into Apple Health / Health Connect.
+ * Null means the session was not created by the app live writer or has not
+ * entered the write flow yet.
+ */
+export type WorkoutHealthWriteStatus = "pending" | "synced" | "failed";
+
+/**
+ * Normalized cardio/outdoor metrics persisted on a workout session.
+ * Keep this separated from the generic session root shape so the cardio
  * module can evolve without overloading the base session contract.
  */
 export type WorkoutOutdoorMetrics = {
@@ -56,7 +64,7 @@ export type WorkoutRouteSummary = {
 };
 
 /**
- * Shared optional patch helper for outdoor metrics updates.
+ * Shared optional patch helper for cardio metrics updates.
  * Useful for merge/upsert flows in services.
  */
 export type WorkoutOutdoorMetricsPatch = Partial<WorkoutOutdoorMetrics>;
@@ -68,22 +76,24 @@ export type WorkoutOutdoorMetricsPatch = Partial<WorkoutOutdoorMetrics>;
 export type WorkoutRouteSummaryPatch = Partial<WorkoutRouteSummary>;
 
 /**
- * Shared helper for session-level outdoor fields in upsert/patch flows.
+ * Shared helper for session-level cardio fields in upsert/patch flows.
  * This is intentionally reusable across controller/service boundaries.
  */
 export type OutdoorSessionFieldsPatch = {
     activityType?: OutdoorActivityType | null;
+    cardioEnvironment?: CardioEnvironment | null;
     hasRoute?: boolean;
     outdoorMetrics?: WorkoutOutdoorMetricsPatch | null;
     routeSummary?: WorkoutRouteSummaryPatch | null;
 };
 
 /**
- * Output-oriented helper when a fully normalized outdoor shape is needed
+ * Output-oriented helper when a fully normalized cardio shape is needed
  * by services or response mappers.
  */
 export type OutdoorSessionFields = {
     activityType: OutdoorActivityType | null;
+    cardioEnvironment: CardioEnvironment | null;
     hasRoute: boolean;
     outdoorMetrics: WorkoutOutdoorMetrics | null;
     routeSummary: WorkoutRouteSummary | null;

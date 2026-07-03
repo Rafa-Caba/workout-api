@@ -70,6 +70,7 @@ export const createSession: RequestHandler = async (req, res: Response) => {
     const payload: CreateTrainingSessionInput = typedReq.validatedBody ?? {
         type: "",
         activityType: null,
+        cardioEnvironment: null,
         startAt: null,
         endAt: null,
         durationSeconds: null,

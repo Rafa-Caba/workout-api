@@ -45,6 +45,21 @@ const nullableString = z.string().nullable();
 const recordUnknownNullable = z.record(z.string(), z.unknown()).nullable();
 
 const outdoorActivityTypeSchema = z.enum(["walking", "running"]);
+const cardioEnvironmentSchema = z.enum(["outdoor", "indoor"]);
+const workoutSessionSourceSchema = z.enum([
+    "manual",
+    "healthkit",
+    "health-connect",
+    "app-live",
+]);
+const workoutSessionKindSchema = z.enum([
+    "device-import",
+    "gym-check",
+    "manual-outdoor",
+    "manual-cardio",
+    "live-cardio",
+]);
+const healthWriteStatusSchema = z.enum(["pending", "synced", "failed"]);
 
 const trainingSessionMetaSchema = z
     .object({
@@ -58,13 +73,18 @@ const trainingSessionMetaSchema = z
         /**
          * Health-enriched metadata fields
          */
-        source: z.enum(["manual", "healthkit", "health-connect"]).nullable().optional(),
+        source: workoutSessionSourceSchema.nullable().optional(),
         sourceDevice: z.string().max(200).nullable().optional(),
         importedAt: z.string().max(60).nullable().optional(),
         lastSyncedAt: z.string().max(60).nullable().optional(),
-        sessionKind: z.enum(["device-import", "gym-check", "manual-outdoor"])
-            .nullable()
-            .optional(),
+        sessionKind: workoutSessionKindSchema.nullable().optional(),
+
+        /**
+         * OS health write metadata for app-created live cardio sessions.
+         */
+        healthWriteStatus: healthWriteStatusSchema.nullable().optional(),
+        healthExternalId: z.string().max(200).nullable().optional(),
+        healthWrittenAt: z.string().max(60).nullable().optional(),
 
         /**
          * Optional useful metadata helpers
@@ -85,6 +105,10 @@ const trainingSessionMetaSchema = z
             importedAt: value.importedAt ?? null,
             lastSyncedAt: value.lastSyncedAt ?? null,
             sessionKind: value.sessionKind ?? null,
+
+            healthWriteStatus: value.healthWriteStatus ?? null,
+            healthExternalId: value.healthExternalId ?? null,
+            healthWrittenAt: value.healthWrittenAt ?? null,
 
             externalId: value.externalId ?? null,
             originalType: value.originalType ?? null,
@@ -210,6 +234,7 @@ const createSessionBodyBaseSchema = z.object({
     type: z.string().min(1).max(120),
 
     activityType: outdoorActivityTypeSchema.nullable().optional(),
+    cardioEnvironment: cardioEnvironmentSchema.nullable().optional(),
 
     startAt: nullableString.optional(),
     endAt: nullableString.optional(),
@@ -280,6 +305,7 @@ export const createSessionBodySchema = createSessionBodyBaseSchema
             type: value.type,
 
             activityType: value.activityType ?? null,
+            cardioEnvironment: value.cardioEnvironment ?? null,
 
             startAt: value.startAt ?? null,
             endAt: value.endAt ?? null,
@@ -322,6 +348,9 @@ export const patchSessionBodySchema = createSessionBodyBaseSchema
         (value): PatchTrainingSessionInput => ({
             ...(value.type !== undefined ? { type: value.type } : {}),
             ...(value.activityType !== undefined ? { activityType: value.activityType } : {}),
+            ...(value.cardioEnvironment !== undefined
+                ? { cardioEnvironment: value.cardioEnvironment }
+                : {}),
             ...(value.startAt !== undefined ? { startAt: value.startAt } : {}),
             ...(value.endAt !== undefined ? { endAt: value.endAt } : {}),
             ...(value.durationSeconds !== undefined

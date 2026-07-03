@@ -137,6 +137,7 @@ const withCreateSessionDefaults = (
     return {
         ...payload,
         activityType: payload.activityType ?? null,
+        cardioEnvironment: payload.cardioEnvironment ?? null,
         hasRoute: payload.hasRoute ?? false,
         outdoorMetrics: payload.outdoorMetrics ?? null,
         routeSummary: payload.routeSummary ?? null,

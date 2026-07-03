@@ -136,7 +136,7 @@ const WorkoutSessionMetaSchema = new Schema(
         source: {
             type: String,
             default: null,
-            enum: ["manual", "healthkit", "health-connect"],
+            enum: ["manual", "healthkit", "health-connect", "app-live"],
         },
         sourceDevice: { type: String, default: null, trim: true, maxlength: 200 },
         importedAt: { type: String, default: null },
@@ -144,7 +144,7 @@ const WorkoutSessionMetaSchema = new Schema(
         sessionKind: {
             type: String,
             default: null,
-            enum: ["device-import", "gym-check", "manual-outdoor"],
+            enum: ["device-import", "gym-check", "manual-outdoor", "manual-cardio", "live-cardio"],
         },
 
         /**
@@ -153,6 +153,19 @@ const WorkoutSessionMetaSchema = new Schema(
          * even though the sub-schema remains flexible.
          */
         externalId: { type: String, default: null, trim: true, maxlength: 200 },
+
+        /**
+         * OS health write metadata used after an app-created live workout is
+         * persisted locally and then written to Apple Health / Health Connect.
+         */
+        healthWriteStatus: {
+            type: String,
+            default: null,
+            enum: ["pending", "synced", "failed", null],
+        },
+        healthExternalId: { type: String, default: null, trim: true, maxlength: 200 },
+        healthWrittenAt: { type: String, default: null },
+
         originalType: { type: String, default: null, trim: true, maxlength: 200 },
         provider: { type: String, default: null, trim: true, maxlength: 120 },
         sessionKey: { type: String, default: null, trim: true, maxlength: 120 },
@@ -170,6 +183,12 @@ const WorkoutSessionSchema = new Schema(
             type: String,
             default: null,
             enum: ["walking", "running", null],
+        },
+
+        cardioEnvironment: {
+            type: String,
+            default: null,
+            enum: ["outdoor", "indoor", null],
         },
 
         startAt: { type: String, default: null },

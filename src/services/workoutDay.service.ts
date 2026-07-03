@@ -36,10 +36,13 @@ import type {
     WorkoutDayBackfillBody,
     WorkoutDayBackfillItemResult,
     WorkoutDayBackfillResult,
+    WorkoutSessionDataSource,
     WorkoutSessionKind,
 } from "../types/workoutDay.types";
 import type {
+    CardioEnvironment,
     OutdoorActivityType,
+    WorkoutHealthWriteStatus,
     WorkoutOutdoorMetrics,
     WorkoutRouteSummary,
 } from "../types/outdoorSession.types";
@@ -127,12 +130,41 @@ const toNullableWorkoutDataSource = (value: unknown): WorkoutDataSource | null =
         : null;
 };
 
+const toNullableWorkoutSessionDataSource = (
+    value: unknown
+): WorkoutSessionDataSource | null => {
+    return value === "manual" ||
+        value === "healthkit" ||
+        value === "health-connect" ||
+        value === "app-live"
+        ? value
+        : null;
+};
+
 const toNullableWorkoutSessionKind = (value: unknown): WorkoutSessionKind | null => {
-    return value === "device-import" || value === "gym-check" || value === "manual-outdoor" ? value : null;
+    return value === "device-import" ||
+        value === "gym-check" ||
+        value === "manual-outdoor" ||
+        value === "manual-cardio" ||
+        value === "live-cardio"
+        ? value
+        : null;
 };
 
 const toNullableOutdoorActivityType = (value: unknown): OutdoorActivityType | null => {
     return value === "walking" || value === "running" ? value : null;
+};
+
+const toNullableCardioEnvironment = (value: unknown): CardioEnvironment | null => {
+    return value === "outdoor" || value === "indoor" ? value : null;
+};
+
+const toNullableWorkoutHealthWriteStatus = (
+    value: unknown
+): WorkoutHealthWriteStatus | null => {
+    return value === "pending" || value === "synced" || value === "failed"
+        ? value
+        : null;
 };
 
 const toExerciseSetUnit = (value: unknown): "lb" | "kg" => {
@@ -220,11 +252,15 @@ const normalizeTrainingSessionMeta = (value: unknown): TrainingSessionMeta | nul
         trainingSource: toNullableString(value.trainingSource),
         dayEffortRpe: toNullableNumber(value.dayEffortRpe),
 
-        source: toNullableWorkoutDataSource(value.source),
+        source: toNullableWorkoutSessionDataSource(value.source),
         sourceDevice: toNullableString(value.sourceDevice),
         importedAt: toNullableString(value.importedAt),
         lastSyncedAt: toNullableString(value.lastSyncedAt),
         sessionKind: toNullableWorkoutSessionKind(value.sessionKind),
+
+        healthWriteStatus: toNullableWorkoutHealthWriteStatus(value.healthWriteStatus),
+        healthExternalId: toNullableString(value.healthExternalId),
+        healthWrittenAt: toNullableString(value.healthWrittenAt),
 
         externalId: toNullableString(value.externalId),
         originalType: toNullableString(value.originalType),
@@ -291,6 +327,7 @@ const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
         id,
         type,
         activityType: toNullableOutdoorActivityType(value.activityType),
+        cardioEnvironment: toNullableCardioEnvironment(value.cardioEnvironment),
         startAt: toNullableString(value.startAt),
         endAt: toNullableString(value.endAt),
         durationSeconds: toNullableNumber(value.durationSeconds),

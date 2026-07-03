@@ -3,7 +3,9 @@
 // planned routines, calendar rollups, upsert payloads, and historical backfill.
 
 import type {
+    CardioEnvironment,
     OutdoorActivityType,
+    WorkoutHealthWriteStatus,
     WorkoutOutdoorMetrics,
     WorkoutRouteSummary,
 } from "./outdoorSession.types";
@@ -15,8 +17,19 @@ export type ResourceType = "image" | "video";
 
 export type WorkoutDataSource = "manual" | "healthkit" | "health-connect";
 
-// export type WorkoutSessionKind = "device-import" | "gym-check";
-export type WorkoutSessionKind = "device-import" | "gym-check" | "manual-outdoor";
+/**
+ * Session-level source supports app-created live workouts in addition to
+ * historical/manual HealthKit and Health Connect imports. Sleep/day-level
+ * sources keep using WorkoutDataSource so app-live stays scoped to sessions.
+ */
+export type WorkoutSessionDataSource = WorkoutDataSource | "app-live";
+
+export type WorkoutSessionKind =
+    | "device-import"
+    | "gym-check"
+    | "manual-outdoor"
+    | "manual-cardio"
+    | "live-cardio";
 
 export type WorkoutSourceDevice = string;
 
@@ -85,11 +98,18 @@ export type TrainingSessionMeta = {
     /**
      * Health-enriched metadata fields
      */
-    source: WorkoutDataSource | null;
+    source: WorkoutSessionDataSource | null;
     sourceDevice: WorkoutSourceDevice | null;
     importedAt: string | null;
     lastSyncedAt: string | null;
     sessionKind: WorkoutSessionKind | null;
+
+    /**
+     * OS health write metadata for app-created live workouts.
+     */
+    healthWriteStatus?: WorkoutHealthWriteStatus | null;
+    healthExternalId?: string | null;
+    healthWrittenAt?: string | null;
 
     /**
      * Optional useful metadata helpers
@@ -104,10 +124,16 @@ export type TrainingSession = {
     type: string;
 
     /**
-     * Neutral activity family for outdoor support.
+     * Neutral activity family for cardio support.
      * Existing gym/manual sessions can keep this as null.
      */
     activityType: OutdoorActivityType | null;
+
+    /**
+     * Distinguishes GPS outdoor sessions from indoor/treadmill sessions.
+     * Legacy outdoor sessions may keep this null until FE/RN migration fills it.
+     */
+    cardioEnvironment: CardioEnvironment | null;
 
     startAt: string | null;
     endAt: string | null;
