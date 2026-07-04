@@ -4,11 +4,11 @@
 
 import type {
     CardioEnvironment,
-    OutdoorActivityType,
+    CardioActivityType,
     WorkoutHealthWriteStatus,
-    WorkoutOutdoorMetrics,
+    WorkoutCardioMetrics,
     WorkoutRouteSummary,
-} from "./outdoorSession.types";
+} from "./cardioSession.types";
 
 export type ISODate = string; // "YYYY-MM-DD"
 export type WeekKey = string; // "YYYY-W##"
@@ -127,11 +127,11 @@ export type TrainingSession = {
      * Neutral activity family for cardio support.
      * Existing gym/manual sessions can keep this as null.
      */
-    activityType: OutdoorActivityType | null;
+    activityType: CardioActivityType | null;
 
     /**
      * Distinguishes GPS outdoor sessions from indoor/treadmill sessions.
-     * Legacy outdoor sessions may keep this null until FE/RN migration fills it.
+     * Non-cardio sessions can keep this null.
      */
     cardioEnvironment: CardioEnvironment | null;
 
@@ -149,11 +149,11 @@ export type TrainingSession = {
     cadenceRpm: number | null;
 
     /**
-     * Outdoor route/session helpers.
+     * Route/session helpers for outdoor cardio sessions.
      * No raw route points are persisted here yet.
      */
     hasRoute: boolean;
-    outdoorMetrics: WorkoutOutdoorMetrics | null;
+    cardioMetrics: WorkoutCardioMetrics | null;
     routeSummary: WorkoutRouteSummary | null;
 
     effortRpe: number | null;

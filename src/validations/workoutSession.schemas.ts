@@ -44,7 +44,7 @@ const nonNegNum = z.coerce
 const nullableString = z.string().nullable();
 const recordUnknownNullable = z.record(z.string(), z.unknown()).nullable();
 
-const outdoorActivityTypeSchema = z.enum(["walking", "running"]);
+const cardioActivityTypeSchema = z.enum(["walking", "running"]);
 const cardioEnvironmentSchema = z.enum(["outdoor", "indoor"]);
 const workoutSessionSourceSchema = z.enum([
     "manual",
@@ -174,7 +174,7 @@ const createExerciseSchema = z
         })
     );
 
-const workoutOutdoorMetricsSchema = z
+const workoutCardioMetricsSchema = z
     .object({
         distanceKm: nonNegNum.nullable().optional(),
         steps: nonNegInt.nullable().optional(),
@@ -233,7 +233,7 @@ const workoutRouteSummarySchema = z
 const createSessionBodyBaseSchema = z.object({
     type: z.string().min(1).max(120),
 
-    activityType: outdoorActivityTypeSchema.nullable().optional(),
+    activityType: cardioActivityTypeSchema.nullable().optional(),
     cardioEnvironment: cardioEnvironmentSchema.nullable().optional(),
 
     startAt: nullableString.optional(),
@@ -255,7 +255,7 @@ const createSessionBodyBaseSchema = z.object({
     cadenceRpm: nonNegNum.nullable().optional(),
 
     hasRoute: z.coerce.boolean().optional(),
-    outdoorMetrics: workoutOutdoorMetricsSchema.nullable().optional(),
+    cardioMetrics: workoutCardioMetricsSchema.nullable().optional(),
     routeSummary: workoutRouteSummarySchema.nullable().optional(),
 
     effortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
@@ -326,7 +326,7 @@ export const createSessionBodySchema = createSessionBodyBaseSchema
             cadenceRpm: value.cadenceRpm ?? null,
 
             hasRoute: value.hasRoute ?? false,
-            outdoorMetrics: value.outdoorMetrics ?? null,
+            cardioMetrics: value.cardioMetrics ?? null,
             routeSummary: value.routeSummary ?? null,
 
             effortRpe: value.effortRpe ?? null,
@@ -370,8 +370,8 @@ export const patchSessionBodySchema = createSessionBodyBaseSchema
                 : {}),
             ...(value.cadenceRpm !== undefined ? { cadenceRpm: value.cadenceRpm } : {}),
             ...(value.hasRoute !== undefined ? { hasRoute: value.hasRoute } : {}),
-            ...(value.outdoorMetrics !== undefined
-                ? { outdoorMetrics: value.outdoorMetrics }
+            ...(value.cardioMetrics !== undefined
+                ? { cardioMetrics: value.cardioMetrics }
                 : {}),
             ...(value.routeSummary !== undefined
                 ? { routeSummary: value.routeSummary }

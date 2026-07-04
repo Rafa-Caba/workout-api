@@ -61,8 +61,22 @@ const recordUnknownNullable = recordUnknown.nullable();
 const rawHealthPayloadSchema = z.unknown().nullable();
 
 const workoutDataSourceSchema = z.enum(["manual", "healthkit", "health-connect"]);
-const workoutSessionKindSchema = z.enum(["device-import", "gym-check", "manual-outdoor"]);
-const outdoorActivityTypeSchema = z.enum(["walking", "running"]);
+const workoutSessionDataSourceSchema = z.enum([
+    "manual",
+    "healthkit",
+    "health-connect",
+    "app-live",
+]);
+const workoutSessionKindSchema = z.enum([
+    "device-import",
+    "gym-check",
+    "manual-outdoor",
+    "manual-cardio",
+    "live-cardio",
+]);
+const healthWriteStatusSchema = z.enum(["pending", "synced", "failed"]);
+const cardioActivityTypeSchema = z.enum(["walking", "running"]);
+const cardioEnvironmentSchema = z.enum(["outdoor", "indoor"]);
 
 /**
  * =========================================================
@@ -277,11 +291,11 @@ const exerciseSchema = z
 
 /**
  * =========================================================
- * Outdoor session helpers
+ * Cardio session helpers
  * =========================================================
  */
 
-const workoutOutdoorMetricsSchema = z
+const workoutCardioMetricsSchema = z
     .object({
         distanceKm: nonNegNumFromQuery.nullable().optional(),
         steps: nonNegIntFromQuery.nullable().optional(),
@@ -332,11 +346,18 @@ const trainingSessionMetaSchema = z
         /**
          * Health-enriched metadata fields.
          */
-        source: workoutDataSourceSchema.nullable().optional(),
+        source: workoutSessionDataSourceSchema.nullable().optional(),
         sourceDevice: z.string().max(200).nullable().optional(),
         importedAt: z.string().max(60).nullable().optional(),
         lastSyncedAt: z.string().max(60).nullable().optional(),
         sessionKind: workoutSessionKindSchema.nullable().optional(),
+
+        /**
+         * OS health write metadata for app-created live cardio sessions.
+         */
+        healthWriteStatus: healthWriteStatusSchema.nullable().optional(),
+        healthExternalId: z.string().max(200).nullable().optional(),
+        healthWrittenAt: z.string().max(60).nullable().optional(),
 
         /**
          * Optional useful metadata helpers.
@@ -352,7 +373,8 @@ const trainingSessionSchema = z
         id: z.string().min(1).optional(),
         type: z.string().min(1),
 
-        activityType: outdoorActivityTypeSchema.nullable().optional(),
+        activityType: cardioActivityTypeSchema.nullable().optional(),
+        cardioEnvironment: cardioEnvironmentSchema.nullable().optional(),
 
         startAt: z.string().nullable().optional(),
         endAt: z.string().nullable().optional(),
@@ -378,7 +400,7 @@ const trainingSessionSchema = z
         cadenceRpm: nonNegNumFromQuery.nullable().optional(),
 
         hasRoute: z.coerce.boolean().optional(),
-        outdoorMetrics: workoutOutdoorMetricsSchema.nullable().optional(),
+        cardioMetrics: workoutCardioMetricsSchema.nullable().optional(),
         routeSummary: workoutRouteSummarySchema.nullable().optional(),
 
         effortRpe: numberFromQuery.min(0).max(10).nullable().optional(),

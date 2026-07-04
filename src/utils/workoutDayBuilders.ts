@@ -126,7 +126,7 @@ const normalizeSessionForOutput = (session: TrainingSession): TrainingSession =>
         media: Array.isArray(session.media) ? session.media : [],
         activityType: session.activityType ?? null,
         hasRoute: session.hasRoute ?? false,
-        outdoorMetrics: session.outdoorMetrics ?? null,
+        cardioMetrics: session.cardioMetrics ?? null,
         routeSummary: session.routeSummary ?? null,
     };
 };

@@ -96,7 +96,7 @@ const WorkoutExerciseSchema = new Schema(
     { _id: true }
 );
 
-const WorkoutOutdoorMetricsSchema = new Schema(
+const WorkoutCardioMetricsSchema = new Schema(
     {
         distanceKm: { type: Number, default: null, min: 0 },
         steps: { type: Number, default: null, min: 0 },
@@ -148,7 +148,7 @@ const WorkoutSessionMetaSchema = new Schema(
         },
 
         /**
-         * Helpful metadata fields used by health/outdoor/manual flows.
+         * Helpful metadata fields used by health/cardio/manual flows.
          * These are explicitly declared so the stored shape stays consistent
          * even though the sub-schema remains flexible.
          */
@@ -210,7 +210,7 @@ const WorkoutSessionSchema = new Schema(
         cadenceRpm: { type: Number, default: null, min: 0 },
 
         hasRoute: { type: Boolean, default: false },
-        outdoorMetrics: { type: WorkoutOutdoorMetricsSchema, default: null },
+        cardioMetrics: { type: WorkoutCardioMetricsSchema, default: null },
         routeSummary: { type: WorkoutRouteSummarySchema, default: null },
 
         effortRpe: { type: Number, default: null, min: 0, max: 10 },

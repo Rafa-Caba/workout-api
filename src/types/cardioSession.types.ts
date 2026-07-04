@@ -1,17 +1,16 @@
-// src/types/outdoorSession.types.ts
-// Shared cardio/outdoor session domain types used by WorkoutDay models,
+// src/types/cardioSession.types.ts
+// Shared cardio session domain types used by WorkoutDay models,
 // services, validators, and future live workout OS sync flows.
 
 /**
  * Supported cardio activity families for the current module scope.
- * Kept as OutdoorActivityType for backwards compatibility with existing
- * Outdoor imports; the value itself also supports indoor cardio sessions.
+ * Used by both indoor and outdoor cardio sessions.
  */
-export type OutdoorActivityType = "walking" | "running";
+export type CardioActivityType = "walking" | "running";
 
 /**
  * Distinguishes GPS-based outdoor workouts from treadmill/indoor sessions.
- * Old sessions can keep this as null until they are normalized/migrated.
+ * Unknown imported records can keep this as null until they are normalized.
  */
 export type CardioEnvironment = "outdoor" | "indoor";
 
@@ -23,11 +22,11 @@ export type CardioEnvironment = "outdoor" | "indoor";
 export type WorkoutHealthWriteStatus = "pending" | "synced" | "failed";
 
 /**
- * Normalized cardio/outdoor metrics persisted on a workout session.
+ * Normalized cardio metrics persisted on a workout session.
  * Keep this separated from the generic session root shape so the cardio
  * module can evolve without overloading the base session contract.
  */
-export type WorkoutOutdoorMetrics = {
+export type WorkoutCardioMetrics = {
     distanceKm: number | null;
     steps: number | null;
     elevationGainM: number | null;
@@ -67,7 +66,7 @@ export type WorkoutRouteSummary = {
  * Shared optional patch helper for cardio metrics updates.
  * Useful for merge/upsert flows in services.
  */
-export type WorkoutOutdoorMetricsPatch = Partial<WorkoutOutdoorMetrics>;
+export type WorkoutCardioMetricsPatch = Partial<WorkoutCardioMetrics>;
 
 /**
  * Shared optional patch helper for route summary updates.
@@ -79,11 +78,11 @@ export type WorkoutRouteSummaryPatch = Partial<WorkoutRouteSummary>;
  * Shared helper for session-level cardio fields in upsert/patch flows.
  * This is intentionally reusable across controller/service boundaries.
  */
-export type OutdoorSessionFieldsPatch = {
-    activityType?: OutdoorActivityType | null;
+export type CardioSessionFieldsPatch = {
+    activityType?: CardioActivityType | null;
     cardioEnvironment?: CardioEnvironment | null;
     hasRoute?: boolean;
-    outdoorMetrics?: WorkoutOutdoorMetricsPatch | null;
+    cardioMetrics?: WorkoutCardioMetricsPatch | null;
     routeSummary?: WorkoutRouteSummaryPatch | null;
 };
 
@@ -91,10 +90,10 @@ export type OutdoorSessionFieldsPatch = {
  * Output-oriented helper when a fully normalized cardio shape is needed
  * by services or response mappers.
  */
-export type OutdoorSessionFields = {
-    activityType: OutdoorActivityType | null;
+export type CardioSessionFields = {
+    activityType: CardioActivityType | null;
     cardioEnvironment: CardioEnvironment | null;
     hasRoute: boolean;
-    outdoorMetrics: WorkoutOutdoorMetrics | null;
+    cardioMetrics: WorkoutCardioMetrics | null;
     routeSummary: WorkoutRouteSummary | null;
 };

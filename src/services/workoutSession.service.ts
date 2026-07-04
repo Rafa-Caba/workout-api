@@ -129,7 +129,7 @@ const ensureTrainingBlock = (dayDoc: WorkoutDayHydrated): void => {
 
 /**
  * Create payload should always be canonical so old gym/manual sessions
- * do not depend on undefined values for the new outdoor fields.
+ * do not depend on undefined values for the new cardio fields.
  */
 const withCreateSessionDefaults = (
     payload: CreateTrainingSessionInput
@@ -139,7 +139,7 @@ const withCreateSessionDefaults = (
         activityType: payload.activityType ?? null,
         cardioEnvironment: payload.cardioEnvironment ?? null,
         hasRoute: payload.hasRoute ?? false,
-        outdoorMetrics: payload.outdoorMetrics ?? null,
+        cardioMetrics: payload.cardioMetrics ?? null,
         routeSummary: payload.routeSummary ?? null,
     };
 };

@@ -41,11 +41,11 @@ import type {
 } from "../types/workoutDay.types";
 import type {
     CardioEnvironment,
-    OutdoorActivityType,
+    CardioActivityType,
     WorkoutHealthWriteStatus,
-    WorkoutOutdoorMetrics,
+    WorkoutCardioMetrics,
     WorkoutRouteSummary,
-} from "../types/outdoorSession.types";
+} from "../types/cardioSession.types";
 
 type WorkoutDayUpsertPayload = UpsertArgs["payload"];
 
@@ -151,7 +151,7 @@ const toNullableWorkoutSessionKind = (value: unknown): WorkoutSessionKind | null
         : null;
 };
 
-const toNullableOutdoorActivityType = (value: unknown): OutdoorActivityType | null => {
+const toNullableCardioActivityType = (value: unknown): CardioActivityType | null => {
     return value === "walking" || value === "running" ? value : null;
 };
 
@@ -268,7 +268,7 @@ const normalizeTrainingSessionMeta = (value: unknown): TrainingSessionMeta | nul
     };
 };
 
-const normalizeWorkoutOutdoorMetrics = (value: unknown): WorkoutOutdoorMetrics | null => {
+const normalizeWorkoutCardioMetrics = (value: unknown): WorkoutCardioMetrics | null => {
     if (value === null) return null;
     if (!isPlainObject(value)) return null;
 
@@ -326,7 +326,7 @@ const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
     return {
         id,
         type,
-        activityType: toNullableOutdoorActivityType(value.activityType),
+        activityType: toNullableCardioActivityType(value.activityType),
         cardioEnvironment: toNullableCardioEnvironment(value.cardioEnvironment),
         startAt: toNullableString(value.startAt),
         endAt: toNullableString(value.endAt),
@@ -341,7 +341,7 @@ const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
         paceSecPerKm: toNullableNumber(value.paceSecPerKm),
         cadenceRpm: toNullableNumber(value.cadenceRpm),
         hasRoute: toNullableBoolean(value.hasRoute) ?? false,
-        outdoorMetrics: normalizeWorkoutOutdoorMetrics(value.outdoorMetrics),
+        cardioMetrics: normalizeWorkoutCardioMetrics(value.cardioMetrics),
         routeSummary: normalizeWorkoutRouteSummary(value.routeSummary),
         effortRpe: toNullableNumber(value.effortRpe),
         notes: toNullableString(value.notes),
