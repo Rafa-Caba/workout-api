@@ -86,6 +86,7 @@ export const createSession: RequestHandler = async (req, res: Response) => {
         hasRoute: false,
         cardioMetrics: null,
         routeSummary: null,
+        routePoints: null,
         effortRpe: null,
         notes: null,
         meta: null,

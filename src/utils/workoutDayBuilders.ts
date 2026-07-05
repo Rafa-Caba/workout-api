@@ -128,6 +128,7 @@ const normalizeSessionForOutput = (session: TrainingSession): TrainingSession =>
         hasRoute: session.hasRoute ?? false,
         cardioMetrics: session.cardioMetrics ?? null,
         routeSummary: session.routeSummary ?? null,
+        routePoints: Array.isArray(session.routePoints) ? session.routePoints : null,
     };
 };
 

@@ -328,6 +328,20 @@ const workoutRouteSummarySchema = z
     })
     .strict();
 
+const workoutRoutePointSchema = z
+    .object({
+        latitude: z.coerce.number().min(-90).max(90),
+        longitude: z.coerce.number().min(-180).max(180),
+
+        altitudeM: z.coerce.number().nullable().optional(),
+        accuracyM: nonNegNumFromQuery.nullable().optional(),
+        speedMps: nonNegNumFromQuery.nullable().optional(),
+        headingDeg: z.coerce.number().min(0).max(360).nullable().optional(),
+
+        recordedAt: z.string().nullable().optional(),
+    })
+    .strict();
+
 /**
  * =========================================================
  * Training
@@ -402,6 +416,7 @@ const trainingSessionSchema = z
         hasRoute: z.coerce.boolean().optional(),
         cardioMetrics: workoutCardioMetricsSchema.nullable().optional(),
         routeSummary: workoutRouteSummarySchema.nullable().optional(),
+        routePoints: z.array(workoutRoutePointSchema).nullable().optional(),
 
         effortRpe: numberFromQuery.min(0).max(10).nullable().optional(),
 

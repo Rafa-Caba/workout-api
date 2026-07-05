@@ -44,6 +44,7 @@ import type {
     CardioActivityType,
     WorkoutHealthWriteStatus,
     WorkoutCardioMetrics,
+    WorkoutRoutePoint,
     WorkoutRouteSummary,
 } from "../types/cardioSession.types";
 
@@ -312,6 +313,45 @@ const normalizeWorkoutRouteSummary = (value: unknown): WorkoutRouteSummary | nul
     };
 };
 
+const normalizeWorkoutRoutePoint = (value: unknown): WorkoutRoutePoint | null => {
+    if (!isPlainObject(value)) return null;
+
+    const latitude = toNullableNumber(value.latitude);
+    const longitude = toNullableNumber(value.longitude);
+
+    if (latitude === null || longitude === null) {
+        return null;
+    }
+
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        return null;
+    }
+
+    const headingDeg = toNullableNumber(value.headingDeg);
+
+    return {
+        latitude,
+        longitude,
+        altitudeM: toNullableNumber(value.altitudeM),
+        accuracyM: toNullableNumber(value.accuracyM),
+        speedMps: toNullableNumber(value.speedMps),
+        headingDeg:
+            headingDeg === null ? null : Math.min(360, Math.max(0, headingDeg)),
+        recordedAt: toNullableString(value.recordedAt),
+    };
+};
+
+const normalizeWorkoutRoutePoints = (value: unknown): WorkoutRoutePoint[] | null => {
+    if (value === null) return null;
+    if (!Array.isArray(value)) return null;
+
+    const normalized = value
+        .map((item) => normalizeWorkoutRoutePoint(item))
+        .filter((item): item is WorkoutRoutePoint => item !== null);
+
+    return normalized.length > 0 ? normalized : null;
+};
+
 const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
     if (!isPlainObject(value)) return null;
 
@@ -343,6 +383,7 @@ const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
         hasRoute: toNullableBoolean(value.hasRoute) ?? false,
         cardioMetrics: normalizeWorkoutCardioMetrics(value.cardioMetrics),
         routeSummary: normalizeWorkoutRouteSummary(value.routeSummary),
+        routePoints: normalizeWorkoutRoutePoints(value.routePoints),
         effortRpe: toNullableNumber(value.effortRpe),
         notes: toNullableString(value.notes),
         meta: normalizeTrainingSessionMeta(value.meta),

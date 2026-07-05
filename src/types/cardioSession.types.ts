@@ -63,6 +63,22 @@ export type WorkoutRouteSummary = {
 };
 
 /**
+ * Persisted raw route point used to render real maps for outdoor cardio
+ * sessions. Values are normalized from phone GPS, HealthKit, or Health Connect.
+ */
+export type WorkoutRoutePoint = {
+    latitude: number;
+    longitude: number;
+
+    altitudeM: number | null;
+    accuracyM: number | null;
+    speedMps: number | null;
+    headingDeg: number | null;
+
+    recordedAt: string | null;
+};
+
+/**
  * Shared optional patch helper for cardio metrics updates.
  * Useful for merge/upsert flows in services.
  */
@@ -75,6 +91,12 @@ export type WorkoutCardioMetricsPatch = Partial<WorkoutCardioMetrics>;
 export type WorkoutRouteSummaryPatch = Partial<WorkoutRouteSummary>;
 
 /**
+ * Optional patch helper for persisted route points. Passing null clears the
+ * detailed route while keeping summary fields available when needed.
+ */
+export type WorkoutRoutePointsPatch = WorkoutRoutePoint[] | null;
+
+/**
  * Shared helper for session-level cardio fields in upsert/patch flows.
  * This is intentionally reusable across controller/service boundaries.
  */
@@ -84,6 +106,7 @@ export type CardioSessionFieldsPatch = {
     hasRoute?: boolean;
     cardioMetrics?: WorkoutCardioMetricsPatch | null;
     routeSummary?: WorkoutRouteSummaryPatch | null;
+    routePoints?: WorkoutRoutePointsPatch;
 };
 
 /**
@@ -96,4 +119,5 @@ export type CardioSessionFields = {
     hasRoute: boolean;
     cardioMetrics: WorkoutCardioMetrics | null;
     routeSummary: WorkoutRouteSummary | null;
+    routePoints: WorkoutRoutePoint[] | null;
 };

@@ -7,6 +7,7 @@ import type {
     CardioActivityType,
     WorkoutHealthWriteStatus,
     WorkoutCardioMetrics,
+    WorkoutRoutePoint,
     WorkoutRouteSummary,
 } from "./cardioSession.types";
 
@@ -150,11 +151,13 @@ export type TrainingSession = {
 
     /**
      * Route/session helpers for outdoor cardio sessions.
-     * No raw route points are persisted here yet.
+     * routeSummary powers fast list/detail previews, while routePoints powers
+     * real map rendering when phone GPS or the OS provider exposes the route.
      */
     hasRoute: boolean;
     cardioMetrics: WorkoutCardioMetrics | null;
     routeSummary: WorkoutRouteSummary | null;
+    routePoints: WorkoutRoutePoint[] | null;
 
     effortRpe: number | null;
     notes: string | null;

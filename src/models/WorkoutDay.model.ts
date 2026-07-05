@@ -131,6 +131,21 @@ const WorkoutRouteSummarySchema = new Schema(
     { _id: false }
 );
 
+const WorkoutRoutePointSchema = new Schema(
+    {
+        latitude: { type: Number, required: true, min: -90, max: 90 },
+        longitude: { type: Number, required: true, min: -180, max: 180 },
+
+        altitudeM: { type: Number, default: null },
+        accuracyM: { type: Number, default: null, min: 0 },
+        speedMps: { type: Number, default: null, min: 0 },
+        headingDeg: { type: Number, default: null, min: 0, max: 360 },
+
+        recordedAt: { type: String, default: null },
+    },
+    { _id: false }
+);
+
 const WorkoutSessionMetaSchema = new Schema(
     {
         source: {
@@ -212,6 +227,7 @@ const WorkoutSessionSchema = new Schema(
         hasRoute: { type: Boolean, default: false },
         cardioMetrics: { type: WorkoutCardioMetricsSchema, default: null },
         routeSummary: { type: WorkoutRouteSummarySchema, default: null },
+        routePoints: { type: [WorkoutRoutePointSchema], default: null },
 
         effortRpe: { type: Number, default: null, min: 0, max: 10 },
         notes: { type: String, default: null, maxlength: 5000 },

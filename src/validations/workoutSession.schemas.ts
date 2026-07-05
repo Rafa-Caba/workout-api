@@ -230,6 +230,29 @@ const workoutRouteSummarySchema = z
         maxLongitude: value.maxLongitude ?? null,
     }));
 
+const workoutRoutePointSchema = z
+    .object({
+        latitude: z.coerce.number().min(-90).max(90),
+        longitude: z.coerce.number().min(-180).max(180),
+
+        altitudeM: z.coerce.number().nullable().optional(),
+        accuracyM: nonNegNum.nullable().optional(),
+        speedMps: nonNegNum.nullable().optional(),
+        headingDeg: z.coerce.number().min(0).max(360).nullable().optional(),
+
+        recordedAt: nullableString.optional(),
+    })
+    .strict()
+    .transform((value) => ({
+        latitude: value.latitude,
+        longitude: value.longitude,
+        altitudeM: value.altitudeM ?? null,
+        accuracyM: value.accuracyM ?? null,
+        speedMps: value.speedMps ?? null,
+        headingDeg: value.headingDeg ?? null,
+        recordedAt: value.recordedAt ?? null,
+    }));
+
 const createSessionBodyBaseSchema = z.object({
     type: z.string().min(1).max(120),
 
@@ -257,6 +280,7 @@ const createSessionBodyBaseSchema = z.object({
     hasRoute: z.coerce.boolean().optional(),
     cardioMetrics: workoutCardioMetricsSchema.nullable().optional(),
     routeSummary: workoutRouteSummarySchema.nullable().optional(),
+    routePoints: z.array(workoutRoutePointSchema).nullable().optional(),
 
     effortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
 
@@ -328,6 +352,7 @@ export const createSessionBodySchema = createSessionBodyBaseSchema
             hasRoute: value.hasRoute ?? false,
             cardioMetrics: value.cardioMetrics ?? null,
             routeSummary: value.routeSummary ?? null,
+            routePoints: value.routePoints ?? null,
 
             effortRpe: value.effortRpe ?? null,
 
@@ -375,6 +400,9 @@ export const patchSessionBodySchema = createSessionBodyBaseSchema
                 : {}),
             ...(value.routeSummary !== undefined
                 ? { routeSummary: value.routeSummary }
+                : {}),
+            ...(value.routePoints !== undefined
+                ? { routePoints: value.routePoints }
                 : {}),
             ...(value.effortRpe !== undefined ? { effortRpe: value.effortRpe } : {}),
             ...(value.notes !== undefined ? { notes: value.notes } : {}),

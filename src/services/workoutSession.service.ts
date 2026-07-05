@@ -141,6 +141,7 @@ const withCreateSessionDefaults = (
         hasRoute: payload.hasRoute ?? false,
         cardioMetrics: payload.cardioMetrics ?? null,
         routeSummary: payload.routeSummary ?? null,
+        routePoints: payload.routePoints ?? null,
     };
 };
 
