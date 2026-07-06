@@ -70,7 +70,6 @@ const workoutSessionDataSourceSchema = z.enum([
 const workoutSessionKindSchema = z.enum([
     "device-import",
     "gym-check",
-    "manual-outdoor",
     "manual-cardio",
     "live-cardio",
 ]);

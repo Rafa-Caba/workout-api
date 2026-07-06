@@ -28,7 +28,6 @@ export type WorkoutSessionDataSource = WorkoutDataSource | "app-live";
 export type WorkoutSessionKind =
     | "device-import"
     | "gym-check"
-    | "manual-outdoor"
     | "manual-cardio"
     | "live-cardio";
 

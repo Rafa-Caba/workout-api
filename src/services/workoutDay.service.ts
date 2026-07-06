@@ -145,7 +145,6 @@ const toNullableWorkoutSessionDataSource = (
 const toNullableWorkoutSessionKind = (value: unknown): WorkoutSessionKind | null => {
     return value === "device-import" ||
         value === "gym-check" ||
-        value === "manual-outdoor" ||
         value === "manual-cardio" ||
         value === "live-cardio"
         ? value

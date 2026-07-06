@@ -159,7 +159,7 @@ const WorkoutSessionMetaSchema = new Schema(
         sessionKind: {
             type: String,
             default: null,
-            enum: ["device-import", "gym-check", "manual-outdoor", "manual-cardio", "live-cardio"],
+            enum: ["device-import", "gym-check", "manual-cardio", "live-cardio"],
         },
 
         /**
