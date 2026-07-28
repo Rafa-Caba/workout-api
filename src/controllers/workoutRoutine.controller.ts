@@ -2,6 +2,7 @@
 
 import type { Request, RequestHandler, Response } from "express";
 
+import type { GymCheckDayPatch } from "../types/gymCheck.types";
 import {
     addRoutineAttachments,
     deleteRoutineAttachment,
@@ -44,53 +45,7 @@ type RoutineAttachmentDeleteQuery = {
 
 type DayKey = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
 
-type GymCheckExerciseSet = {
-    setIndex: number;
-    reps: number | null;
-    weight: number | null;
-    unit: "lb" | "kg";
-    rpe: number | null;
-    isWarmup: boolean;
-    isDropSet: boolean;
-    tempo: string | null;
-    restSec: number | null;
-    tags: string[] | null;
-    meta: Record<string, unknown> | null;
-};
-
-type GymCheckExercisePatch = {
-    done?: boolean | null;
-    notes?: string | null;
-    durationMin?: number | null;
-    mediaPublicIds?: string[] | null;
-    performedSets?: GymCheckExerciseSet[] | null;
-};
-
-type GymCheckMetricsPatch = {
-    startAt?: string | null;
-    endAt?: string | null;
-    activeKcal?: number | null;
-    totalKcal?: number | null;
-    avgHr?: number | null;
-    maxHr?: number | null;
-    distanceKm?: number | null;
-    steps?: number | null;
-    elevationGainM?: number | null;
-    paceSecPerKm?: number | null;
-    cadenceRpm?: number | null;
-    effortRpe?: number | null;
-    trainingSource?: string | null;
-    source?: "manual" | "healthkit" | "health-connect" | null;
-    sourceDevice?: string | null;
-    dayEffortRpe?: number | null;
-};
-
-type RoutineGymCheckPatchBody = {
-    durationMin?: number | null;
-    notes?: string | null;
-    metrics?: GymCheckMetricsPatch | null;
-    exercises?: Record<string, GymCheckExercisePatch> | null;
-};
+type RoutineGymCheckPatchBody = GymCheckDayPatch;
 
 type RoutineExercise = {
     id: string;

@@ -34,6 +34,7 @@ export type GymCheckMetricsPatch = {
 
     activeKcal?: number | null;
     totalKcal?: number | null;
+    totalKcalEstimated?: boolean | null;
 
     avgHr?: number | null;
     maxHr?: number | null;

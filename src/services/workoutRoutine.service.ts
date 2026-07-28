@@ -89,6 +89,7 @@ type StoredGymCheckMetrics = {
 
     activeKcal?: number | null;
     totalKcal?: number | null;
+    totalKcalEstimated?: boolean | null;
 
     avgHr?: number | null;
     maxHr?: number | null;
@@ -161,6 +162,11 @@ const cleanNumberOrNull = (value: unknown): number | null => {
     if (value === null) return null;
     if (typeof value !== "number") return null;
     return Number.isFinite(value) ? value : null;
+};
+
+const cleanRoundedNumberOrNull = (value: unknown): number | null => {
+    const parsed = cleanNumberOrNull(value);
+    return parsed === null ? null : Math.round(parsed);
 };
 
 const cleanBooleanOrNull = (value: unknown): boolean | null | undefined => {
@@ -542,8 +548,11 @@ const normalizeGymCheckMetricsPatch = (payload: unknown): GymCheckMetricsPatch =
     if ("startAt" in payload) out.startAt = cleanIsoOrNull(payload.startAt);
     if ("endAt" in payload) out.endAt = cleanIsoOrNull(payload.endAt);
 
-    if ("activeKcal" in payload) out.activeKcal = cleanNumberOrNull(payload.activeKcal);
-    if ("totalKcal" in payload) out.totalKcal = cleanNumberOrNull(payload.totalKcal);
+    if ("activeKcal" in payload) out.activeKcal = cleanRoundedNumberOrNull(payload.activeKcal);
+    if ("totalKcal" in payload) out.totalKcal = cleanRoundedNumberOrNull(payload.totalKcal);
+    if ("totalKcalEstimated" in payload) {
+        out.totalKcalEstimated = cleanBooleanOrNull(payload.totalKcalEstimated);
+    }
 
     if ("avgHr" in payload) out.avgHr = cleanNumberOrNull(payload.avgHr);
     if ("maxHr" in payload) out.maxHr = cleanNumberOrNull(payload.maxHr);

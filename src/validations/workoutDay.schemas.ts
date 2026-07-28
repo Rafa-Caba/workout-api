@@ -50,6 +50,12 @@ const nonNegNumFromQuery = numberFromQuery
     .refine((value) => Number.isFinite(value), "Expected a finite number")
     .refine((value) => value >= 0, "Expected >= 0");
 
+/** Normalizes fractional provider calories to the integer API contract. */
+const roundedNonNegIntFromQuery = numberFromQuery
+    .refine((value) => Number.isFinite(value), "Expected a finite number")
+    .refine((value) => value >= 0, "Expected >= 0")
+    .transform((value) => Math.round(value));
+
 const recordUnknown = z.record(z.string(), z.unknown());
 const recordUnknownNullable = recordUnknown.nullable();
 
@@ -355,6 +361,7 @@ const trainingSessionMetaSchema = z
         sessionKey: z.string().max(120).nullable().optional(),
         trainingSource: z.string().max(120).nullable().optional(),
         dayEffortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
+        totalKcalEstimated: z.boolean().nullable().optional(),
 
         /**
          * Health-enriched metadata fields.
@@ -393,8 +400,8 @@ const trainingSessionSchema = z
         endAt: z.string().nullable().optional(),
 
         durationSeconds: nonNegIntFromQuery.nullable().optional(),
-        activeKcal: nonNegNumFromQuery.nullable().optional(),
-        totalKcal: nonNegNumFromQuery.nullable().optional(),
+        activeKcal: roundedNonNegIntFromQuery.nullable().optional(),
+        totalKcal: roundedNonNegIntFromQuery.nullable().optional(),
 
         avgHr: nonNegIntFromQuery
             .refine((value) => value <= 300, "Expected <= 300")

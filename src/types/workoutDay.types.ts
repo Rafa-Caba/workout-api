@@ -1,4 +1,4 @@
-// backend/src/workout/types/workoutDay.types.ts
+// /src/types/workoutDay.types.ts
 // Core domain types for workout days, sleep tracking, training sessions,
 // planned routines, calendar rollups, upsert payloads, and historical backfill.
 
@@ -94,6 +94,7 @@ export type TrainingSessionMeta = {
     sessionKey?: string | null;
     trainingSource?: string | null;
     dayEffortRpe?: number | null;
+    totalKcalEstimated?: boolean | null;
 
     /**
      * Health-enriched metadata fields

@@ -141,6 +141,7 @@ const gymCheckMetricsPatchSchema = z
 
         activeKcal: z.number().min(0).max(200000).nullable().optional(),
         totalKcal: z.number().min(0).max(200000).nullable().optional(),
+        totalKcalEstimated: z.boolean().nullable().optional(),
 
         avgHr: z.number().min(0).max(300).nullable().optional(),
         maxHr: z.number().min(0).max(300).nullable().optional(),

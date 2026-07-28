@@ -161,6 +161,7 @@ const WorkoutSessionMetaSchema = new Schema(
             default: null,
             enum: ["device-import", "gym-check", "manual-cardio", "live-cardio"],
         },
+        totalKcalEstimated: { type: Boolean, default: null },
 
         /**
          * Helpful metadata fields used by health/cardio/manual flows.

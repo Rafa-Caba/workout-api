@@ -41,6 +41,16 @@ const nonNegNum = z.coerce
     .refine((value) => Number.isFinite(value), "Expected a finite number")
     .refine((value) => value >= 0, "Expected >= 0");
 
+/**
+ * Health providers can return fractional kilocalories. The persisted API
+ * contract stores calories as rounded non-negative integers.
+ */
+const roundedNonNegInt = z.coerce
+    .number()
+    .refine((value) => Number.isFinite(value), "Expected a finite number")
+    .refine((value) => value >= 0, "Expected >= 0")
+    .transform((value) => Math.round(value));
+
 const nullableString = z.string().nullable();
 const recordUnknownNullable = z.record(z.string(), z.unknown()).nullable();
 
@@ -68,6 +78,7 @@ const trainingSessionMetaSchema = z
         sessionKey: z.string().max(120).nullable().optional(),
         trainingSource: z.string().max(120).nullable().optional(),
         dayEffortRpe: z.coerce.number().min(0).max(10).nullable().optional(),
+        totalKcalEstimated: z.boolean().nullable().optional(),
 
         /**
          * Health-enriched metadata fields
@@ -98,6 +109,7 @@ const trainingSessionMetaSchema = z
             sessionKey: value.sessionKey ?? null,
             trainingSource: value.trainingSource ?? null,
             dayEffortRpe: value.dayEffortRpe ?? null,
+            totalKcalEstimated: value.totalKcalEstimated ?? null,
 
             source: value.source ?? null,
             sourceDevice: value.sourceDevice ?? null,
@@ -263,8 +275,8 @@ const createSessionBodyBaseSchema = z.object({
 
     durationSeconds: nonNegInt.nullable().optional(),
 
-    activeKcal: nonNegInt.nullable().optional(),
-    totalKcal: nonNegInt.nullable().optional(),
+    activeKcal: roundedNonNegInt.nullable().optional(),
+    totalKcal: roundedNonNegInt.nullable().optional(),
 
     avgHr: nonNegInt.max(300).nullable().optional(),
     maxHr: nonNegInt.max(300).nullable().optional(),

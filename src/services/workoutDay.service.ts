@@ -101,6 +101,10 @@ const toNullableNumber = (value: unknown): number | null => {
     return isFiniteNumber(value) ? value : null;
 };
 
+const toNullableRoundedInt = (value: unknown): number | null => {
+    return isFiniteNumber(value) ? Math.round(value) : null;
+};
+
 const toNullableString = (value: unknown): string | null => {
     return typeof value === "string" ? value : null;
 };
@@ -251,6 +255,7 @@ const normalizeTrainingSessionMeta = (value: unknown): TrainingSessionMeta | nul
         sessionKey: toNullableString(value.sessionKey),
         trainingSource: toNullableString(value.trainingSource),
         dayEffortRpe: toNullableNumber(value.dayEffortRpe),
+        totalKcalEstimated: toNullableBoolean(value.totalKcalEstimated),
 
         source: toNullableWorkoutSessionDataSource(value.source),
         sourceDevice: toNullableString(value.sourceDevice),
@@ -370,8 +375,8 @@ const normalizeTrainingSession = (value: unknown): TrainingSession | null => {
         startAt: toNullableString(value.startAt),
         endAt: toNullableString(value.endAt),
         durationSeconds: toNullableNumber(value.durationSeconds),
-        activeKcal: toNullableNumber(value.activeKcal),
-        totalKcal: toNullableNumber(value.totalKcal),
+        activeKcal: toNullableRoundedInt(value.activeKcal),
+        totalKcal: toNullableRoundedInt(value.totalKcal),
         avgHr: toNullableNumber(value.avgHr),
         maxHr: toNullableNumber(value.maxHr),
         distanceKm: toNullableNumber(value.distanceKm),
