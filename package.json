@@ -9,7 +9,9 @@
     "dev": "nodemon",
     "build": "tsc",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate:day-notes": "node dist/scripts/migrateWorkoutDayNotes.js",
+    "migrate:day-notes:dev": "tsx src/scripts/migrateWorkoutDayNotes.ts"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

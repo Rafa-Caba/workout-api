@@ -11,6 +11,7 @@ import trainerRoutes from "./routes/trainer.routes";
 import userRoutes from "./routes/user.routes";
 import userMetricRoutes from "./routes/userMetric.routes";
 import workoutDayRoutes from "./routes/workoutDay.routes";
+import workoutDayNotesRoutes from "./routes/workoutDayNotes.routes";
 import workoutSessionRoutes from "./routes/workoutSession.routes";
 import workoutMediaRoutes from "./routes/workoutMedia.routes";
 import workoutRoutineRoutes from "./routes/workoutRoutine.routes";
@@ -44,6 +45,7 @@ app.use("/api/users", userMetricRoutes);
 app.use("/api/settings", settingsRoutes);
 
 app.use("/api/workout", workoutDayRoutes);
+app.use("/api/workout", workoutDayNotesRoutes);
 app.use("/api/workout", workoutSessionRoutes);
 app.use("/api/workout", workoutMediaRoutes);
 app.use("/api/workout", workoutRoutineRoutes);

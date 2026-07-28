@@ -41,6 +41,29 @@ type JsonTransformRet = JsonObject & {
     updatedAt?: string | Date;
 };
 
+const WorkoutDayNoteSchema = new Schema(
+    {
+        id: { type: String, required: true, trim: true, maxlength: 120 },
+        type: {
+            type: String,
+            required: true,
+            enum: [
+                "birthday",
+                "appointment",
+                "reminder",
+                "health",
+                "personal",
+                "other",
+            ],
+        },
+        title: { type: String, required: true, trim: true, maxlength: 120 },
+        description: { type: String, default: null, trim: true, maxlength: 2000 },
+        createdAt: { type: String, required: true },
+        updatedAt: { type: String, required: true },
+    },
+    { _id: false }
+);
+
 const WorkoutMediaItemSchema = new Schema(
     {
         publicId: { type: String, required: true, trim: true, maxlength: 300 },
@@ -398,6 +421,8 @@ const WorkoutDaySchema = new Schema(
         },
 
         plannedMeta: { type: PlannedMetaSchema, default: null },
+
+        dayNotes: { type: [WorkoutDayNoteSchema], default: [] },
 
         notes: { type: String, default: null, maxlength: 10000 },
         tags: { type: [String], default: null },

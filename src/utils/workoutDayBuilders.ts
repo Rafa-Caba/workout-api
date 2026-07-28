@@ -14,6 +14,7 @@ import type {
     PlannedRoutine,
     PlannedMeta,
 } from "../types/workoutDay.types";
+import type { WorkoutDayNote } from "../types/workoutDayNote.types";
 
 /**
  * =========================================================
@@ -57,6 +58,7 @@ type BuildableDayInput = {
     plannedRoutine?: PlannedRoutine | null;
     plannedMeta?: PlannedMeta | null;
 
+    dayNotes?: WorkoutDayNote[];
     notes?: string | null;
     tags?: string[] | null;
     meta?: Record<string, unknown> | null;
@@ -504,6 +506,7 @@ export const DEFAULT_FIELDS_ALL = [
     "hasTraining",
     "sleep",
     "training",
+    "dayNotes",
     "notes",
     "tags",
     "meta",
@@ -553,6 +556,9 @@ export const pickFields = (
                 break;
             case "plannedMeta":
                 output.plannedMeta = obj.plannedMeta;
+                break;
+            case "dayNotes":
+                output.dayNotes = obj.dayNotes;
                 break;
             case "notes":
                 output.notes = obj.notes;
@@ -658,6 +664,7 @@ export const buildCalendarDay = (
         sleep: opts.includeSleep ? day.sleep ?? null : undefined,
         training: opts.includeTraining ? day.training ?? null : undefined,
 
+        dayNotes: Array.isArray(day.dayNotes) ? day.dayNotes : [],
         notes: day.notes ?? null,
         tags: day.tags ?? null,
         meta: day.meta ?? null,

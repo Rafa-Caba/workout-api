@@ -40,6 +40,10 @@ import type {
     WorkoutSessionKind,
 } from "../types/workoutDay.types";
 import type {
+    WorkoutDayNote,
+    WorkoutDayNoteType,
+} from "../types/workoutDayNote.types";
+import type {
     CardioEnvironment,
     CardioActivityType,
     WorkoutHealthWriteStatus,
@@ -58,6 +62,7 @@ type WorkoutDayCreateInput = {
     training: TrainingBlock | null;
     plannedRoutine: PlannedRoutine | null;
     plannedMeta: PlannedMeta | null;
+    dayNotes: WorkoutDayNote[];
     notes: string | null;
     tags: string[] | null;
     meta: Record<string, unknown> | null;
@@ -127,6 +132,75 @@ const toNullableStringArray = (value: unknown): string[] | null => {
 const toNullableMeta = (value: unknown): Record<string, unknown> | null => {
     if (value === null) return null;
     return isPlainObject(value) ? value : null;
+};
+
+/**
+ * Prevents legacy clients from writing structured notes back into meta.dayNotes.
+ * Typed notes can only be changed through the dedicated atomic CRUD endpoints.
+ */
+const stripLegacyDayNotesFromMeta = (
+    value: Record<string, unknown> | null
+): Record<string, unknown> | null => {
+    if (!value) return null;
+
+    const sanitized: Record<string, unknown> = {};
+
+    for (const [key, entry] of Object.entries(value)) {
+        if (key !== "dayNotes") {
+            sanitized[key] = entry;
+        }
+    }
+
+    return Object.keys(sanitized).length > 0 ? sanitized : null;
+};
+
+const WORKOUT_DAY_NOTE_TYPES: readonly WorkoutDayNoteType[] = [
+    "birthday",
+    "appointment",
+    "reminder",
+    "health",
+    "personal",
+    "other",
+];
+
+const isWorkoutDayNoteType = (value: unknown): value is WorkoutDayNoteType => {
+    return WORKOUT_DAY_NOTE_TYPES.some((type) => type === value);
+};
+
+const normalizeWorkoutDayNote = (value: unknown): WorkoutDayNote | null => {
+    if (!isPlainObject(value)) return null;
+
+    const id = toNullableString(value.id)?.trim() ?? "";
+    const title = toNullableString(value.title)?.trim() ?? "";
+    const createdAt = toNullableString(value.createdAt)?.trim() ?? "";
+    const updatedAt = toNullableString(value.updatedAt)?.trim() ?? "";
+
+    if (
+        !id ||
+        !title ||
+        !createdAt ||
+        !updatedAt ||
+        !isWorkoutDayNoteType(value.type)
+    ) {
+        return null;
+    }
+
+    return {
+        id,
+        type: value.type,
+        title,
+        description: toNullableString(value.description)?.trim() || null,
+        createdAt,
+        updatedAt,
+    };
+};
+
+const normalizeWorkoutDayNotes = (value: unknown): WorkoutDayNote[] => {
+    if (!Array.isArray(value)) return [];
+
+    return value
+        .map((note) => normalizeWorkoutDayNote(note))
+        .filter((note): note is WorkoutDayNote => note !== null);
 };
 
 const toNullableWorkoutDataSource = (value: unknown): WorkoutDataSource | null => {
@@ -533,6 +607,7 @@ const normalizeCalendarDayFull = (value: unknown): CalendarDayFull => {
             ? normalizePlannedRoutine(value.plannedRoutine)
             : undefined,
         plannedMeta: hasOwn(value, "plannedMeta") ? normalizePlannedMeta(value.plannedMeta) : undefined,
+        dayNotes: hasOwn(value, "dayNotes") ? normalizeWorkoutDayNotes(value.dayNotes) : undefined,
         notes: hasOwn(value, "notes") ? toNullableString(value.notes) : undefined,
         tags: hasOwn(value, "tags") ? toNullableStringArray(value.tags) : undefined,
         meta: hasOwn(value, "meta") ? toNullableMeta(value.meta) : undefined,
@@ -608,6 +683,7 @@ const buildCanonicalDefaults = (
         training: null,
         plannedRoutine: null,
         plannedMeta: null,
+        dayNotes: [],
         notes: null,
         tags: null,
         meta: null,
@@ -747,13 +823,17 @@ const mergeMeta = (
 ): Record<string, unknown> | null => {
     const normalizedExisting = toNullableMeta(existing);
 
-    if (incoming === undefined) return normalizedExisting;
+    if (incoming === undefined) {
+        return stripLegacyDayNotesFromMeta(normalizedExisting);
+    }
     if (incoming === null) return null;
 
-    return {
+    const sanitizedIncoming = stripLegacyDayNotesFromMeta(incoming);
+
+    return stripLegacyDayNotesFromMeta({
         ...(normalizedExisting ?? {}),
-        ...incoming,
-    };
+        ...(sanitizedIncoming ?? {}),
+    });
 };
 
 const applyFullReplace = (
@@ -771,7 +851,9 @@ const applyFullReplace = (
     if (hasOwn(payload, "plannedMeta")) out.plannedMeta = normalizePlannedMeta(payload.plannedMeta);
     if (hasOwn(payload, "notes")) out.notes = payload.notes ?? null;
     if (hasOwn(payload, "tags")) out.tags = payload.tags ?? null;
-    if (hasOwn(payload, "meta")) out.meta = payload.meta ?? null;
+    if (hasOwn(payload, "meta")) {
+        out.meta = stripLegacyDayNotesFromMeta(payload.meta ?? null);
+    }
 
     out.weekKey = getWeekKeyFromISODate(date);
 
@@ -830,6 +912,7 @@ const buildCalendarFallbackDay = (date: string): CalendarDayFull => {
         training: null,
         plannedRoutine: null,
         plannedMeta: null,
+        dayNotes: [],
         notes: null,
         tags: null,
         meta: null,

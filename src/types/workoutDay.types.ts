@@ -2,6 +2,8 @@
 // Core domain types for workout days, sleep tracking, training sessions,
 // planned routines, calendar rollups, upsert payloads, and historical backfill.
 
+import type { WorkoutDayNote } from "./workoutDayNote.types";
+
 import type {
     CardioEnvironment,
     CardioActivityType,
@@ -12,6 +14,7 @@ import type {
 } from "./cardioSession.types";
 
 export type ISODate = string; // "YYYY-MM-DD"
+export type ISODateTime = string; // ISO datetime
 export type WeekKey = string; // "YYYY-W##"
 
 export type ResourceType = "image" | "video";
@@ -220,6 +223,7 @@ export type WorkoutDayDoc = {
     training: TrainingBlock | null;
     plannedRoutine: PlannedRoutine | null;
     plannedMeta: PlannedMeta | null;
+    dayNotes: WorkoutDayNote[];
     notes: string | null;
     tags: string[] | null;
     meta: Record<string, unknown> | null;
@@ -282,6 +286,7 @@ export type CalendarDayFull = {
     training?: TrainingBlock | null;
     plannedRoutine?: PlannedRoutine | null;
     plannedMeta?: PlannedMeta | null;
+    dayNotes?: WorkoutDayNote[];
     notes?: string | null;
     tags?: string[] | null;
     meta?: Record<string, unknown> | null;
