@@ -1,97 +1,156 @@
-import mongoose from "mongoose";
-import { WorkoutDayModel } from "../models/WorkoutDay.model";
-import type { ExportResponsePayload, WorkoutExportOptions } from "../types/workoutExport.types";
+// /src/services/workoutExport.service.ts
+// Backward-compatible JSON/CSV exporter for the existing GET endpoint.
 
-type MinimalDay = any;
+import mongoose from "mongoose";
+
+import { WorkoutDayModel } from "../models/WorkoutDay.model";
+import type {
+    ExportResponsePayload,
+    WorkoutExportOptions,
+} from "../types/workoutExport.types";
+import {
+    averageNumbers,
+    isRecord,
+    readArray,
+    readNumber,
+    readString,
+    round,
+    sumNumbers,
+    valueToId,
+    type UnknownRecord,
+} from "./workoutExport/workoutExport.utils";
 
 function csvEscape(value: unknown): string {
     if (value === null || value === undefined) return "";
-    const s = String(value);
-    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
+
+    const text = String(value);
+
+    return /[",\n\r]/.test(text)
+        ? `"${text.replace(/"/g, '""')}"`
+        : text;
 }
 
-function sum(nums: Array<number | null | undefined>): number {
-    return nums.reduce<number>(
-        (acc, n) => acc + (typeof n === "number" && Number.isFinite(n) ? n : 0),
-        0
-    );
-}
-
-function avg(nums: Array<number | null | undefined>): number | null {
-    const filtered = nums.filter((n): n is number => typeof n === "number" && Number.isFinite(n));
-    if (filtered.length === 0) return null;
-    return filtered.reduce((a, b) => a + b, 0) / filtered.length;
-}
-
-function formatFilename(from: string, to: string, scope: string, format: string) {
+function formatFilename(
+    from: string,
+    to: string,
+    scope: string,
+    format: string,
+): string {
     return `workout-export_${scope}_${from}_to_${to}.${format}`;
 }
 
-async function getDaysLean(userId: string, from: string, to: string): Promise<MinimalDay[]> {
-    const userObjectId = new mongoose.Types.ObjectId(userId);
+function readRecordFrom(
+    record: UnknownRecord,
+    key: string,
+): UnknownRecord | null {
+    const value = record[key];
+    return isRecord(value) ? value : null;
+}
 
-    // Projection is conservative but includes needed blocks.
-    const projection = {
-        userId: 1,
-        date: 1,
-        weekKey: 1,
-        sleep: 1,
-        training: 1,
-        notes: 1,
-        tags: 1,
-        meta: 1,
-    };
+function readNumberFrom(
+    record: UnknownRecord | null,
+    key: string,
+): number | null {
+    return record ? readNumber(record[key]) : null;
+}
 
-    const docs = await WorkoutDayModel.find({
-        userId: userObjectId,
+function readStringFrom(
+    record: UnknownRecord | null,
+    key: string,
+): string | null {
+    return record ? readString(record[key]) : null;
+}
+
+function readRecordArray(value: unknown): UnknownRecord[] {
+    return readArray(value).filter(isRecord);
+}
+
+async function getDaysLean(
+    userId: string,
+    from: string,
+    to: string,
+): Promise<UnknownRecord[]> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+        throw Object.assign(new Error("Invalid authenticated user id."), {
+            statusCode: 401,
+            code: "INVALID_AUTH_USER",
+        });
+    }
+
+    const docs: readonly unknown[] = await WorkoutDayModel.find({
+        userId: new mongoose.Types.ObjectId(userId),
         date: { $gte: from, $lte: to },
     })
-        .select(projection)
+        .select({
+            userId: 1,
+            date: 1,
+            weekKey: 1,
+            sleep: 1,
+            training: 1,
+            notes: 1,
+            tags: 1,
+            meta: 1,
+        })
         .sort({ date: 1 })
         .lean();
 
-    const days = docs.map((d: any) => {
-        const { _id, ...rest } = d;
-        return { id: String(_id), ...rest };
-    });
+    return docs
+        .filter(isRecord)
+        .map((document): UnknownRecord => {
+            const { _id, ...rest } = document;
 
-    return days;
+            return {
+                ...rest,
+                id: valueToId(_id) ?? "",
+            };
+        });
 }
 
-function stripRawDeep(day: any): any {
-    if (!day || typeof day !== "object") return day;
+function stripRawDeep(day: UnknownRecord): UnknownRecord {
+    const output: UnknownRecord = { ...day };
+    const sleep = readRecordFrom(output, "sleep");
 
-    const out: any = { ...day };
-
-    if (out.sleep && typeof out.sleep === "object") {
-        out.sleep = { ...out.sleep };
-        if ("raw" in out.sleep) out.sleep.raw = null;
+    if (sleep) {
+        output.sleep = {
+            ...sleep,
+            raw: null,
+        };
     }
 
-    if (out.training && typeof out.training === "object") {
-        out.training = { ...out.training };
-        if ("raw" in out.training) out.training.raw = null;
+    const training = readRecordFrom(output, "training");
 
-        if (Array.isArray(out.training.sessions)) {
-            out.training.sessions = out.training.sessions.map((s: any) => {
-                if (!s || typeof s !== "object") return s;
-                const sOut: any = { ...s };
-                if ("raw" in sOut) sOut.raw = null;
-                return sOut;
-            });
-        }
+    if (training) {
+        const sessions = Array.isArray(training.sessions)
+            ? readRecordArray(training.sessions).map(
+                (session): UnknownRecord => ({
+                    ...session,
+                    raw: null,
+                }),
+            )
+            : training.sessions ?? null;
+
+        output.training = {
+            ...training,
+            raw: null,
+            sessions,
+        };
     }
 
-    return out;
+    return output;
 }
 
-function buildJsonBody(days: any[], includeRaw: boolean): string {
-    const finalDays = includeRaw ? days : days.map(stripRawDeep);
-    return JSON.stringify(finalDays, null, 2);
+function buildJsonBody(
+    days: readonly UnknownRecord[],
+    includeRaw: boolean,
+): string {
+    return JSON.stringify(
+        includeRaw ? days : days.map(stripRawDeep),
+        null,
+        2,
+    );
 }
 
-function buildDayCsv(days: any[]): string {
+function buildDayCsv(days: readonly UnknownRecord[]): string {
     const header = [
         "date",
         "weekKey",
@@ -110,44 +169,56 @@ function buildDayCsv(days: any[]): string {
         "tags",
         "notes",
     ];
+    const lines = [header.join(",")];
 
-    const lines: string[] = [];
-    lines.push(header.join(","));
-
-    for (const d of days) {
-        const sessions = d?.training?.sessions ?? [];
-        const sessionsCount = Array.isArray(sessions) ? sessions.length : 0;
-
-        const totalActiveKcal = sum((Array.isArray(sessions) ? sessions : []).map((s: any) => s?.activeKcal ?? null));
-        const totalDurationSeconds = sum(
-            (Array.isArray(sessions) ? sessions : []).map((s: any) => s?.durationSeconds ?? null)
-        );
-
-        const avgSessionAvgHr = avg((Array.isArray(sessions) ? sessions : []).map((s: any) => s?.avgHr ?? null));
-
-        const maxHr = (Array.isArray(sessions) ? sessions : [])
-            .map((s: any) => (typeof s?.maxHr === "number" ? s.maxHr : null))
-            .filter((x: any) => typeof x === "number") as number[];
-
-        const maxSessionMaxHr = maxHr.length ? Math.max(...maxHr) : null;
+    for (const day of days) {
+        const sleep = readRecordFrom(day, "sleep");
+        const training = readRecordFrom(day, "training");
+        const sessions = readRecordArray(training?.sessions);
+        const maxHrValues = sessions
+            .map((session) => readNumber(session.maxHr))
+            .filter((value): value is number => value !== null);
+        const tags = readArray(day.tags)
+            .map(readString)
+            .filter((tag): tag is string => tag !== null);
 
         const row = [
-            d?.date ?? "",
-            d?.weekKey ?? "",
-            d?.sleep?.score ?? "",
-            d?.sleep?.timeAsleepMinutes ?? "",
-            d?.sleep?.awakeMinutes ?? "",
-            d?.sleep?.remMinutes ?? "",
-            d?.sleep?.coreMinutes ?? "",
-            d?.sleep?.deepMinutes ?? "",
-            sessionsCount,
-            totalActiveKcal,
-            totalDurationSeconds,
-            avgSessionAvgHr ?? "",
-            maxSessionMaxHr ?? "",
-            d?.training?.dayEffortRpe ?? "",
-            Array.isArray(d?.tags) ? d.tags.join("|") : "",
-            d?.notes ?? "",
+            readString(day.date),
+            readString(day.weekKey),
+            readNumberFrom(sleep, "score"),
+            readNumberFrom(sleep, "timeAsleepMinutes"),
+            readNumberFrom(sleep, "awakeMinutes"),
+            readNumberFrom(sleep, "remMinutes"),
+            readNumberFrom(sleep, "coreMinutes"),
+            readNumberFrom(sleep, "deepMinutes"),
+            sessions.length,
+            round(
+                sumNumbers(
+                    sessions.map((session) =>
+                        readNumber(session.activeKcal),
+                    ),
+                ),
+                2,
+            ),
+            round(
+                sumNumbers(
+                    sessions.map((session) =>
+                        readNumber(session.durationSeconds),
+                    ),
+                ),
+                0,
+            ),
+            averageNumbers(
+                sessions.map((session) =>
+                    readNumber(session.avgHr),
+                ),
+            ),
+            maxHrValues.length > 0
+                ? Math.max(...maxHrValues)
+                : null,
+            readNumberFrom(training, "dayEffortRpe"),
+            tags.join("|"),
+            readString(day.notes),
         ].map(csvEscape);
 
         lines.push(row.join(","));
@@ -156,7 +227,7 @@ function buildDayCsv(days: any[]): string {
     return lines.join("\n");
 }
 
-function buildSessionCsv(days: any[]): string {
+function buildSessionCsv(days: readonly UnknownRecord[]): string {
     const header = [
         "date",
         "weekKey",
@@ -176,38 +247,40 @@ function buildSessionCsv(days: any[]): string {
         "mediaCount",
         "notes",
     ];
+    const lines = [header.join(",")];
 
-    const lines: string[] = [];
-    lines.push(header.join(","));
+    for (const day of days) {
+        const training = readRecordFrom(day, "training");
+        const sessions = readRecordArray(training?.sessions);
 
-    for (const d of days) {
-        const sessions = d?.training?.sessions ?? [];
-        if (!Array.isArray(sessions)) continue;
-
-        for (const s of sessions) {
-            const mediaCount = Array.isArray(s?.media) ? s.media.length : 0;
-
-            // In lean docs, session id might be _id; in toJSON it becomes id.
-            const sid = s?.id ?? (s?._id ? String(s._id) : "");
+        for (const session of sessions) {
+            const cardioMetrics = readRecordFrom(
+                session,
+                "cardioMetrics",
+            );
+            const mediaCount = readArray(session.media).length;
 
             const row = [
-                d?.date ?? "",
-                d?.weekKey ?? "",
-                sid,
-                s?.type ?? "",
-                s?.startAt ?? "",
-                s?.endAt ?? "",
-                s?.durationSeconds ?? "",
-                s?.activeKcal ?? "",
-                s?.totalKcal ?? "",
-                s?.avgHr ?? "",
-                s?.maxHr ?? "",
-                s?.distanceKm ?? "",
-                s?.steps ?? "",
-                s?.paceSecPerKm ?? "",
-                s?.effortRpe ?? "",
+                readString(day.date),
+                readString(day.weekKey),
+                valueToId(session.id ?? session._id),
+                readString(session.type),
+                readString(session.startAt),
+                readString(session.endAt),
+                readNumber(session.durationSeconds),
+                readNumber(session.activeKcal),
+                readNumber(session.totalKcal),
+                readNumber(session.avgHr),
+                readNumber(session.maxHr),
+                readNumber(session.distanceKm) ??
+                readNumberFrom(cardioMetrics, "distanceKm"),
+                readNumber(session.steps) ??
+                readNumberFrom(cardioMetrics, "steps"),
+                readNumber(session.paceSecPerKm) ??
+                readNumberFrom(cardioMetrics, "paceSecPerKm"),
+                readNumber(session.effortRpe),
                 mediaCount,
-                s?.notes ?? "",
+                readString(session.notes),
             ].map(csvEscape);
 
             lines.push(row.join(","));
@@ -221,30 +294,47 @@ export async function exportWorkoutData(
     userId: string,
     from: string,
     to: string,
-    options: WorkoutExportOptions
+    options: WorkoutExportOptions,
 ): Promise<ExportResponsePayload> {
     if (options.scope === "exercise") {
-        const err: any = new Error("Exercise-level export is not available yet (exercise tracking not implemented).");
-        err.statusCode = 409;
-        throw err;
+        throw Object.assign(
+            new Error(
+                "Exercise-level legacy export is not available. " +
+                "Use the complete XLSX export instead.",
+            ),
+            {
+                statusCode: 409,
+                code: "NOT_AVAILABLE",
+            },
+        );
     }
 
     const days = await getDaysLean(userId, from, to);
 
     if (options.format === "json") {
-        const body = buildJsonBody(days, options.includeRaw);
         return {
-            filename: formatFilename(from, to, options.scope, "json"),
+            filename: formatFilename(
+                from,
+                to,
+                options.scope,
+                "json",
+            ),
             contentType: "application/json; charset=utf-8",
-            body,
+            body: buildJsonBody(days, options.includeRaw),
         };
     }
 
-    const csv = options.scope === "session" ? buildSessionCsv(days) : buildDayCsv(days);
-
     return {
-        filename: formatFilename(from, to, options.scope, "csv"),
+        filename: formatFilename(
+            from,
+            to,
+            options.scope,
+            "csv",
+        ),
         contentType: "text/csv; charset=utf-8",
-        body: csv,
+        body:
+            options.scope === "session"
+                ? buildSessionCsv(days)
+                : buildDayCsv(days),
     };
 }

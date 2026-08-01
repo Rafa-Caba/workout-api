@@ -1,18 +1,42 @@
+// /src/routes/workoutExport.routes.ts
+// Authenticated workout export endpoints.
+
 import { Router } from "express";
+
+import {
+    exportWorkout,
+    exportWorkoutFile,
+} from "../controllers/workoutExport.controller";
 import { requireAuth } from "../middlewares/requireAuth";
+import { validate } from "../middlewares/validate";
 import { asyncHandler } from "../utils/asyncHandler";
-import { validateQuery } from "../middlewares/validateQuery";
-import { exportWorkout } from "../controllers/workoutExport.controller";
-import { workoutExportQuerySchema } from "../validations/workoutExport.schemas";
+import {
+    workoutExportQuerySchema,
+    workoutReportRequestSchema,
+} from "../validations/workoutExport.schemas";
 
 const router = Router();
 
-// GET /api/workout/export?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv&scope=day|session|exercise&includeRaw=true|false
+/**
+ * Legacy JSON/CSV endpoint kept for compatibility.
+ * GET /api/workout/export?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv
+ */
 router.get(
     "/export",
     requireAuth,
-    validateQuery(workoutExportQuerySchema),
-    asyncHandler(exportWorkout)
+    validate({ query: workoutExportQuerySchema }),
+    asyncHandler(exportWorkout),
+);
+
+/**
+ * Complete file endpoint used by Web, iOS, and Android.
+ * POST /api/workout/export
+ */
+router.post(
+    "/export",
+    requireAuth,
+    validate({ body: workoutReportRequestSchema }),
+    asyncHandler(exportWorkoutFile),
 );
 
 export default router;
