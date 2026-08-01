@@ -352,6 +352,8 @@ function renderVisualWorksheet(sheet: SpreadsheetVisualSheet): string {
         ? '<drawing r:id="rId1"/>'
         : "";
 
+    // SpreadsheetML requires pageMargins/pageSetup before drawing. Emitting
+    // drawing earlier makes Excel repair and replace the complete worksheet.
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"${relationshipsNamespace}>
   <dimension ref="${dimensions}"/>
@@ -360,9 +362,9 @@ function renderVisualWorksheet(sheet: SpreadsheetVisualSheet): string {
   <cols>${columnsXml}</cols>
   <sheetData>${rowsXml}</sheetData>
   ${mergesXml}
-  ${drawingXml}
   <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
   <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>
+  ${drawingXml}
 </worksheet>`;
 }
 
