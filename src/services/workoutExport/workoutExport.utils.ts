@@ -41,33 +41,96 @@ export function readStringArray(value: unknown): string[] {
         .filter((item): item is string => item !== null);
 }
 
-export function valueToId(value: unknown): string | null {
+type IdentifierKey = "_id" | "id";
+
+const identifierKeys: readonly IdentifierKey[] = ["_id", "id"];
+const maxIdentifierDepth = 8;
+
+/**
+ * Safely reads a property that may be implemented as a getter.
+ */
+function readObjectProperty(value: object, key: PropertyKey): unknown {
+    try {
+        return Reflect.get(value, key);
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Calls an identifier formatter without trusting the external object shape.
+ */
+function callIdentifierMethod(
+    value: object,
+    methodName: "toHexString" | "toString",
+): string | null {
+    const method = readObjectProperty(value, methodName);
+
+    if (typeof method !== "function") return null;
+
+    try {
+        const result: unknown = Reflect.apply(method, value, []);
+        const normalized = readString(result);
+
+        if (!normalized || normalized === "[object Object]") return null;
+
+        return normalized;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Resolves primitive, populated-document, and Mongoose/BSON ObjectId values.
+ *
+ * ObjectId exposes an `_id` getter that returns the same ObjectId instance.
+ * Tracking visited objects and skipping self-references prevents infinite recursion.
+ */
+function valueToIdInternal(
+    value: unknown,
+    visited: WeakSet<object>,
+    depth: number,
+): string | null {
     if (typeof value === "string") {
-        const trimmed = value.trim();
-        return trimmed.length > 0 ? trimmed : null;
+        return readString(value);
     }
 
     if (typeof value === "number" || typeof value === "bigint") {
         return String(value);
     }
 
-    if (isRecord(value)) {
-        const nestedId = valueToId(value._id ?? value.id);
-        if (nestedId) return nestedId;
-    }
+    if (value === null || typeof value !== "object") return null;
+    if (depth > maxIdentifierDepth || visited.has(value)) return null;
 
-    if (value && typeof value === "object") {
-        const maybeToString = Reflect.get(value, "toString");
-        if (typeof maybeToString === "function") {
-            const result = Reflect.apply(maybeToString, value, []);
-            if (typeof result === "string" && result !== "[object Object]") {
-                const trimmed = result.trim();
-                return trimmed.length > 0 ? trimmed : null;
+    visited.add(value);
+
+    // BSON/Mongoose ObjectId should be normalized before inspecting its `id` buffer.
+    const hexadecimalId = callIdentifierMethod(value, "toHexString");
+    if (hexadecimalId) return hexadecimalId;
+
+    if (isRecord(value)) {
+        for (const key of identifierKeys) {
+            const nestedValue = readObjectProperty(value, key);
+
+            if (nestedValue === null || nestedValue === undefined || nestedValue === value) {
+                continue;
             }
+
+            const nestedId = valueToIdInternal(
+                nestedValue,
+                visited,
+                depth + 1,
+            );
+
+            if (nestedId) return nestedId;
         }
     }
 
-    return null;
+    return callIdentifierMethod(value, "toString");
+}
+
+export function valueToId(value: unknown): string | null {
+    return valueToIdInternal(value, new WeakSet<object>(), 0);
 }
 
 export function toIsoString(value: unknown): string | null {

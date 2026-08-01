@@ -8,6 +8,24 @@ import type {
     WorkoutReportSession,
 } from "../../types/workoutExport.types";
 import {
+    buildDayMetrics,
+    buildSleepMetrics,
+    formatReportDateTime,
+    formatReportDuration,
+    formatReportMinutes,
+    formatReportNumber,
+    formatReportPace,
+    formatReportPercent,
+    formatReportTime,
+    getSessionCadenceRpm,
+    getSessionDistanceKm,
+    getSessionElevationM,
+    getSessionMetaText,
+    getSessionPaceSecPerKm,
+    getSessionRoutePointCount,
+    getSessionSteps,
+} from "./workoutExportPresentation.utils";
+import {
     isRecord,
     readStringFrom,
     round,
@@ -24,11 +42,29 @@ type SpreadsheetColumn = {
 
 type SpreadsheetRow = Record<string, SpreadsheetCell>;
 
-type SpreadsheetSheet = {
+type SpreadsheetVisualRow = {
+    cells: SpreadsheetCell[];
+    styles?: number[];
+    height?: number;
+};
+
+type SpreadsheetTableSheet = {
+    kind?: "table";
     name: string;
     columns: SpreadsheetColumn[];
     rows: SpreadsheetRow[];
 };
+
+type SpreadsheetVisualSheet = {
+    kind: "visual";
+    name: string;
+    columnWidths: number[];
+    rows: SpreadsheetVisualRow[];
+    merges: string[];
+    freezeRows?: number;
+};
+
+type SpreadsheetSheet = SpreadsheetTableSheet | SpreadsheetVisualSheet;
 
 type ZipEntry = {
     name: string;
@@ -197,20 +233,24 @@ function inferColumnWidth(column: SpreadsheetColumn, rows: readonly SpreadsheetR
     return column.width ?? Math.max(10, Math.min(48, maxLength + 2));
 }
 
-function renderWorksheet(sheet: SpreadsheetSheet): string {
+function renderTableWorksheet(sheet: SpreadsheetTableSheet): string {
     const safeRows = sheet.rows.length > 0 ? sheet.rows : [{}];
     const headerCells = sheet.columns
-        .map((column, index) => renderCell(`${columnName(index)}1`, column.header, 1))
+        .map((column, index) =>
+            renderCell(`${columnName(index)}1`, column.header, 6),
+        )
         .join("");
 
     const dataRows = sheet.rows
         .map((row, rowIndex) => {
             const excelRow = rowIndex + 2;
+            const rowStyle = rowIndex % 2 === 0 ? 7 : 8;
             const cells = sheet.columns
                 .map((column, columnIndex) =>
                     renderCell(
                         `${columnName(columnIndex)}${excelRow}`,
                         row[column.key] ?? null,
+                        rowStyle,
                     ),
                 )
                 .join("");
@@ -227,38 +267,128 @@ function renderWorksheet(sheet: SpreadsheetSheet): string {
             return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`;
         })
         .join("");
+    const filterXml = sheet.rows.length > 0
+        ? `<autoFilter ref="${dimensions}"/>`
+        : "";
 
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="${dimensions}"/>
-  <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
-  <sheetFormatPr defaultRowHeight="15"/>
+  <sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <sheetFormatPr defaultRowHeight="18"/>
   <cols>${columnsXml}</cols>
-  <sheetData><row r="1" ht="22" customHeight="1">${headerCells}</row>${dataRows}</sheetData>
-  <autoFilter ref="${dimensions}"/>
+  <sheetData><row r="1" ht="26" customHeight="1">${headerCells}</row>${dataRows}</sheetData>
+  ${filterXml}
 </worksheet>`;
+}
+
+function renderVisualWorksheet(sheet: SpreadsheetVisualSheet): string {
+    const maxCells = Math.max(
+        1,
+        ...sheet.rows.map((row) => row.cells.length),
+        sheet.columnWidths.length,
+    );
+    const lastColumn = columnName(maxCells - 1);
+    const lastRow = Math.max(1, sheet.rows.length);
+    const dimensions = `A1:${lastColumn}${lastRow}`;
+    const columnsXml = sheet.columnWidths
+        .map(
+            (width, index) =>
+                `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`,
+        )
+        .join("");
+    const rowsXml = sheet.rows
+        .map((row, rowIndex) => {
+            const excelRow = rowIndex + 1;
+            const cells = row.cells
+                .map((cell, columnIndex) =>
+                    renderCell(
+                        `${columnName(columnIndex)}${excelRow}`,
+                        cell,
+                        row.styles?.[columnIndex] ?? 0,
+                    ),
+                )
+                .join("");
+            const height = row.height
+                ? ` ht="${row.height}" customHeight="1"`
+                : "";
+            return `<row r="${excelRow}"${height}>${cells}</row>`;
+        })
+        .join("");
+    const mergesXml = sheet.merges.length > 0
+        ? `<mergeCells count="${sheet.merges.length}">${sheet.merges
+            .map((reference) => `<mergeCell ref="${reference}"/>`)
+            .join("")}</mergeCells>`
+        : "";
+    const freezeRows = sheet.freezeRows ?? 0;
+    const paneXml = freezeRows > 0
+        ? `<pane ySplit="${freezeRows}" topLeftCell="A${freezeRows + 1}" activePane="bottomLeft" state="frozen"/>`
+        : "";
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="${dimensions}"/>
+  <sheetViews><sheetView workbookViewId="0" showGridLines="0">${paneXml}</sheetView></sheetViews>
+  <sheetFormatPr defaultRowHeight="18"/>
+  <cols>${columnsXml}</cols>
+  <sheetData>${rowsXml}</sheetData>
+  ${mergesXml}
+  <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
+  <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>
+</worksheet>`;
+}
+
+function renderWorksheet(sheet: SpreadsheetSheet): string {
+    return sheet.kind === "visual"
+        ? renderVisualWorksheet(sheet)
+        : renderTableWorksheet(sheet);
 }
 
 function renderStyles(): string {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="2">
-    <font><sz val="11"/><name val="Calibri"/><family val="2"/></font>
-    <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
+  <fonts count="8">
+    <font><sz val="10"/><name val="Aptos"/><family val="2"/></font>
+    <font><b/><color rgb="FFFFFFFF"/><sz val="20"/><name val="Aptos Display"/><family val="2"/></font>
+    <font><color rgb="FF475569"/><sz val="10"/><name val="Aptos"/><family val="2"/></font>
+    <font><b/><color rgb="FF172033"/><sz val="10"/><name val="Aptos"/><family val="2"/></font>
+    <font><b/><color rgb="FFFFFFFF"/><sz val="12"/><name val="Aptos Display"/><family val="2"/></font>
+    <font><b/><color rgb="FF172033"/><sz val="10"/><name val="Aptos"/><family val="2"/></font>
+    <font><b/><color rgb="FF6D28D9"/><sz val="11"/><name val="Aptos"/><family val="2"/></font>
+    <font><i/><color rgb="FF64748B"/><sz val="9"/><name val="Aptos"/><family val="2"/></font>
   </fonts>
-  <fills count="3">
+  <fills count="8">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF8B5CF6"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFF5F3FF"/><bgColor indexed="64"/></patternFill></fill>
     <fill><patternFill patternType="solid"><fgColor rgb="FF172033"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFEDE9FE"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFE8F8F5"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFF8FAFC"/><bgColor indexed="64"/></patternFill></fill>
   </fills>
-  <borders count="2">
+  <borders count="3">
     <border><left/><right/><top/><bottom/><diagonal/></border>
-    <border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right><top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom><diagonal/></border>
+    <border><left style="thin"><color rgb="FFD7DEE8"/></left><right style="thin"><color rgb="FFD7DEE8"/></right><top style="thin"><color rgb="FFD7DEE8"/></top><bottom style="thin"><color rgb="FFD7DEE8"/></bottom><diagonal/></border>
+    <border><left style="medium"><color rgb="FF8B5CF6"/></left><right style="thin"><color rgb="FFD7DEE8"/></right><top style="thin"><color rgb="FFD7DEE8"/></top><bottom style="thin"><color rgb="FFD7DEE8"/></bottom><diagonal/></border>
   </borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="2">
+  <cellXfs count="15">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="5" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="7" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="0" borderId="2" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="7" borderId="2" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="7" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="6" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="7" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
@@ -318,6 +448,462 @@ function spreadsheetJsonPreview(value: unknown): string | null {
         serialized.slice(0, XLSX_METADATA_CHUNK_LENGTH) +
         " … [contenido completo en Metadata técnica]"
     );
+}
+
+
+function emptyVisualCells(count: number): SpreadsheetCell[] {
+    return Array.from({ length: count }, () => null);
+}
+
+function buildVisualReportSheet(
+    document: WorkoutReportDocument,
+): SpreadsheetVisualSheet {
+    const maxColumns = 24;
+    const rows: SpreadsheetVisualRow[] = [];
+    const merges: string[] = [];
+    const { days, generatedAt, options, range, user } = document;
+
+    function addRow(
+        cells: SpreadsheetCell[],
+        styles?: number[],
+        height?: number,
+    ): number {
+        rows.push({ cells, styles, height });
+        return rows.length;
+    }
+
+    function addMergedRow(
+        value: SpreadsheetCell,
+        style: number,
+        height: number,
+        fromColumn = 0,
+        toColumn = maxColumns - 1,
+    ): number {
+        const cells = emptyVisualCells(maxColumns);
+        const styles = emptyVisualCells(maxColumns).map(() => 0);
+        cells[fromColumn] = value;
+        styles[fromColumn] = style;
+        const rowNumber = addRow(cells, styles, height);
+        merges.push(
+            `${columnName(fromColumn)}${rowNumber}:${columnName(toColumn)}${rowNumber}`,
+        );
+        return rowNumber;
+    }
+
+    function addSpacer(height = 8): void {
+        addRow([null], [0], height);
+    }
+
+    function addSection(title: string): void {
+        addMergedRow(title, 5, 26);
+    }
+
+    function addTable(
+        headers: readonly string[],
+        data: readonly SpreadsheetCell[][],
+        emptyMessage: string,
+    ): void {
+        addRow([...headers], headers.map(() => 6), 28);
+
+        if (data.length === 0) {
+            const rowNumber = addRow(
+                [emptyMessage],
+                [14],
+                24,
+            );
+            merges.push(
+                `A${rowNumber}:${columnName(Math.max(0, headers.length - 1))}${rowNumber}`,
+            );
+            return;
+        }
+
+        data.forEach((values, index) => {
+            addRow(
+                [...values],
+                values.map(() => (index % 2 === 0 ? 7 : 8)),
+                24,
+            );
+        });
+    }
+
+    addMergedRow("WORKOUT APP - REPORTE COMPLETO DE ACTIVIDAD", 1, 34);
+    addMergedRow(
+        "Resumen visual y detalle completo de sueño, entrenamiento, sesiones, notas, rutas y plan.",
+        2,
+        26,
+    );
+    addSpacer(6);
+
+    const metadataRow1 = emptyVisualCells(maxColumns);
+    const metadataStyle1 = emptyVisualCells(maxColumns).map(() => 0);
+    metadataRow1[0] = "Usuario";
+    metadataStyle1[0] = 3;
+    metadataRow1[1] = user.name;
+    metadataStyle1[1] = 4;
+    metadataRow1[6] = "Correo";
+    metadataStyle1[6] = 3;
+    metadataRow1[7] = user.email || "-";
+    metadataStyle1[7] = 4;
+    metadataRow1[12] = "Periodo";
+    metadataStyle1[12] = 3;
+    metadataRow1[13] = range.label;
+    metadataStyle1[13] = 4;
+    metadataRow1[18] = "Generado";
+    metadataStyle1[18] = 3;
+    metadataRow1[19] = formatReportDateTime(generatedAt);
+    metadataStyle1[19] = 4;
+    const metadataRowNumber1 = addRow(metadataRow1, metadataStyle1, 25);
+    merges.push(
+        `B${metadataRowNumber1}:F${metadataRowNumber1}`,
+        `H${metadataRowNumber1}:L${metadataRowNumber1}`,
+        `N${metadataRowNumber1}:R${metadataRowNumber1}`,
+        `T${metadataRowNumber1}:X${metadataRowNumber1}`,
+    );
+
+    const metadataRow2 = emptyVisualCells(maxColumns);
+    const metadataStyle2 = emptyVisualCells(maxColumns).map(() => 0);
+    metadataRow2[0] = "Desde";
+    metadataStyle2[0] = 3;
+    metadataRow2[1] = range.from;
+    metadataStyle2[1] = 4;
+    metadataRow2[6] = "Hasta";
+    metadataStyle2[6] = 3;
+    metadataRow2[7] = range.to;
+    metadataStyle2[7] = 4;
+    metadataRow2[12] = "Zona horaria";
+    metadataStyle2[12] = 3;
+    metadataRow2[13] = user.timezone ?? "-";
+    metadataStyle2[13] = 4;
+    metadataRow2[18] = "Opciones";
+    metadataStyle2[18] = 3;
+    metadataRow2[19] = [
+        options.includeEmptyDays ? "días vacíos" : null,
+        options.includeMediaLinks ? "links de media" : null,
+        options.includeGpsPoints ? "puntos GPS" : null,
+        options.includeTechnicalMetadata ? "metadata técnica" : null,
+    ].filter((value): value is string => value !== null).join(" | ") || "reporte estándar";
+    metadataStyle2[19] = 4;
+    const metadataRowNumber2 = addRow(metadataRow2, metadataStyle2, 25);
+    merges.push(
+        `B${metadataRowNumber2}:F${metadataRowNumber2}`,
+        `H${metadataRowNumber2}:L${metadataRowNumber2}`,
+        `N${metadataRowNumber2}:R${metadataRowNumber2}`,
+        `T${metadataRowNumber2}:X${metadataRowNumber2}`,
+    );
+
+    addSpacer(8);
+
+    const dayMetrics = days.map(buildDayMetrics);
+    addSection(days.length === 1 ? "KPIs del día" : "KPIs por día");
+    addTable(
+        [
+            "📅 Fecha",
+            "⏱ Entrenamiento",
+            "🔥 Kcal activas",
+            "🔥 Kcal totales",
+            "🏋 Sesiones",
+            "🏃 Cardio",
+            "🏋 Gym",
+            "🎬 Media",
+            "🛌 Sueño",
+            "🏆 Sleep Score",
+        ],
+        dayMetrics.map((metrics) => [
+            metrics.dateLabel,
+            formatReportDuration(metrics.durationSeconds),
+            formatReportNumber(metrics.activeKcal, 1, " kcal"),
+            formatReportNumber(metrics.totalKcal, 1, " kcal"),
+            metrics.sessionCount,
+            metrics.cardioSessionCount,
+            metrics.gymSessionCount,
+            metrics.mediaCount,
+            formatReportMinutes(metrics.sleepMinutes),
+            formatReportNumber(metrics.sleepScore, 0),
+        ]),
+        "No hay datos de KPI para este periodo.",
+    );
+
+    addSpacer();
+    addSection("Resumen de entrenamiento");
+    addTable(
+        [
+            "📅 Fecha",
+            "🏋 Sesiones",
+            "💪 Ejercicios",
+            "🔢 Sets",
+            "⏱ Duración",
+            "🔥 Kcal activas",
+            "🔥 Kcal totales",
+            "📏 Distancia",
+            "👟 Pasos",
+            "🎯 RPE",
+        ],
+        dayMetrics.map((metrics) => [
+            metrics.dateLabel,
+            metrics.sessionCount,
+            metrics.exerciseCount,
+            metrics.setCount,
+            formatReportDuration(metrics.durationSeconds),
+            formatReportNumber(metrics.activeKcal, 1, " kcal"),
+            formatReportNumber(metrics.totalKcal, 1, " kcal"),
+            formatReportNumber(metrics.distanceKm, 2, " km"),
+            formatReportNumber(metrics.steps, 0),
+            formatReportNumber(metrics.dayRpe, 1),
+        ]),
+        "No hay entrenamiento registrado para este periodo.",
+    );
+
+    addSpacer();
+    addSection(days.length === 1 ? "Detalle de sueño del día" : "Detalle de sueño por día");
+    const sleepMetrics = days
+        .map(buildSleepMetrics)
+        .filter((metrics): metrics is NonNullable<ReturnType<typeof buildSleepMetrics>> => metrics !== null);
+    addTable(
+        [
+            "📅 Fecha",
+            "🛌 Total dormido",
+            "🛏 En cama",
+            "🏆 Sleep Score",
+            "💤 Eficiencia",
+            "🔁 Readiness",
+            "🧠 REM %",
+            "🌙 Deep %",
+            "💤 Ligero",
+            "⏱ Despierto",
+            "📡 Fuente",
+            "⌚ Dispositivo",
+            "⬇ Importado",
+            "🔄 Última sync",
+        ],
+        sleepMetrics.map((metrics) => [
+            metrics.dateLabel,
+            formatReportMinutes(metrics.totalMinutes),
+            formatReportMinutes(metrics.inBedMinutes),
+            formatReportNumber(metrics.score, 0),
+            formatReportPercent(metrics.efficiencyPct),
+            formatReportNumber(metrics.readiness, 0),
+            formatReportPercent(metrics.remPct),
+            formatReportPercent(metrics.deepPct),
+            formatReportMinutes(metrics.coreMinutes),
+            formatReportMinutes(metrics.awakeMinutes),
+            metrics.source ?? "-",
+            metrics.sourceDevice ?? "-",
+            formatReportDateTime(metrics.importedAt),
+            formatReportDateTime(metrics.lastSyncedAt),
+        ]),
+        "No hay registros de sueño para este periodo.",
+    );
+
+    const reportSessions = days.flatMap((day) =>
+        (day.training?.sessions ?? []).map((session) => ({ day, session })),
+    );
+
+    addSpacer();
+    addSection("Sesiones completas");
+    addTable(
+        [
+            "📅 Fecha",
+            "🏷 Tipo",
+            "🏃 Actividad",
+            "🌎 Entorno",
+            "🟢 Inicio",
+            "🔴 Fin",
+            "⏱ Duración",
+            "🎬 Media",
+            "🔥 Kcal activas",
+            "🔥 Kcal totales",
+            "❤️ FC prom",
+            "⬆ FC máx",
+            "👟 Pasos",
+            "📏 Distancia",
+            "⛰ Elevación",
+            "⏱ Ritmo",
+            "🔁 Cadencia",
+            "🚴 Vel. prom",
+            "⚡ Vel. máx",
+            "🎯 RPE",
+            "📡 Fuente",
+            "⌚ Dispositivo",
+            "🗺 Puntos ruta",
+            "📝 Notas",
+        ],
+        reportSessions.map(({ day, session }) => [
+            day.date,
+            session.type,
+            session.activityType ?? "-",
+            session.cardioEnvironment ?? "-",
+            formatReportTime(session.startAt),
+            formatReportTime(session.endAt),
+            formatReportDuration(session.durationSeconds),
+            session.media.length,
+            formatReportNumber(session.activeKcal, 1, " kcal"),
+            formatReportNumber(session.totalKcal, 1, " kcal"),
+            formatReportNumber(session.avgHr, 0, " bpm"),
+            formatReportNumber(session.maxHr, 0, " bpm"),
+            formatReportNumber(getSessionSteps(session), 0),
+            formatReportNumber(getSessionDistanceKm(session), 2, " km"),
+            formatReportNumber(getSessionElevationM(session), 1, " m"),
+            formatReportPace(getSessionPaceSecPerKm(session)),
+            formatReportNumber(getSessionCadenceRpm(session), 0, " rpm"),
+            formatReportNumber(session.cardioMetrics?.avgSpeedKmh ?? null, 2, " km/h"),
+            formatReportNumber(session.cardioMetrics?.maxSpeedKmh ?? null, 2, " km/h"),
+            formatReportNumber(session.effortRpe, 1),
+            getSessionMetaText(session, "source") ?? "-",
+            getSessionMetaText(session, "sourceDevice") ?? "-",
+            getSessionRoutePointCount(session),
+            session.notes ?? "-",
+        ]),
+        "No hay sesiones registradas para este periodo.",
+    );
+
+    const noteRows = days.flatMap((day) =>
+        day.dayNotes.map((note) => [
+            day.date,
+            note.type,
+            note.title,
+            note.description ?? "-",
+            formatReportDateTime(note.createdAt),
+            formatReportDateTime(note.updatedAt),
+        ] satisfies SpreadsheetCell[]),
+    );
+
+    addSpacer();
+    addSection("Notas del día");
+    addTable(
+        ["📅 Fecha", "🏷 Tipo", "📝 Título", "Descripción", "Creada", "Actualizada"],
+        noteRows,
+        "No hay notas del día para este periodo.",
+    );
+
+    const exerciseRows = reportSessions.flatMap(({ day, session }) =>
+        session.exercises.map((exercise, exerciseIndex) => [
+            day.date,
+            session.type,
+            exerciseIndex + 1,
+            exercise.name,
+            exercise.movementName ?? "-",
+            exercise.sets.length,
+            exercise.notes ?? "-",
+            session.id,
+        ] satisfies SpreadsheetCell[]),
+    );
+
+    addSpacer();
+    addSection("Ejercicios");
+    addTable(
+        ["📅 Fecha", "Sesión", "Orden", "💪 Ejercicio", "Movimiento", "Sets", "📝 Notas", "Session ID"],
+        exerciseRows,
+        "No hay ejercicios registrados para este periodo.",
+    );
+
+    const setRows = reportSessions.flatMap(({ day, session }) =>
+        session.exercises.flatMap((exercise) =>
+            exercise.sets.map((set) => [
+                day.date,
+                session.type,
+                exercise.name,
+                set.setIndex,
+                set.reps ?? "-",
+                set.weight ?? "-",
+                set.unit,
+                set.rpe ?? "-",
+                set.tempo ?? "-",
+                set.restSec ?? "-",
+                set.isWarmup ? "Sí" : "No",
+                set.isDropSet ? "Sí" : "No",
+            ] satisfies SpreadsheetCell[]),
+        ),
+    );
+
+    addSpacer();
+    addSection("Sets");
+    addTable(
+        ["📅 Fecha", "Sesión", "Ejercicio", "Set", "Reps", "Peso", "Unidad", "RPE", "Tempo", "Descanso s", "Warmup", "Drop set"],
+        setRows,
+        "No hay sets registrados para este periodo.",
+    );
+
+    const routeRows = reportSessions
+        .filter(({ session }) => getSessionRoutePointCount(session) > 0)
+        .map(({ day, session }) => [
+            day.date,
+            session.type,
+            getSessionRoutePointCount(session),
+            formatReportNumber(getSessionDistanceKm(session), 2, " km"),
+            formatReportNumber(getSessionElevationM(session), 1, " m"),
+            session.routeSummary?.startLatitude ?? session.routePoints[0]?.latitude ?? "-",
+            session.routeSummary?.startLongitude ?? session.routePoints[0]?.longitude ?? "-",
+            session.routeSummary?.endLatitude ?? session.routePoints[session.routePoints.length - 1]?.latitude ?? "-",
+            session.routeSummary?.endLongitude ?? session.routePoints[session.routePoints.length - 1]?.longitude ?? "-",
+        ] satisfies SpreadsheetCell[]);
+
+    addSpacer();
+    addSection("Rutas");
+    addTable(
+        ["📅 Fecha", "Sesión", "Puntos", "Distancia", "Elevación", "Lat inicio", "Lon inicio", "Lat fin", "Lon fin"],
+        routeRows,
+        "No hay rutas registradas para este periodo.",
+    );
+
+    const planRows = days.flatMap((day) => {
+        const routine = day.plannedRoutine;
+        if (!routine) return [];
+
+        if (routine.exercises.length === 0) {
+            return [[
+                day.date,
+                routine.sessionType ?? "-",
+                routine.focus ?? "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                routine.notes ?? "-",
+            ] satisfies SpreadsheetCell[]];
+        }
+
+        return routine.exercises.map((exercise, index) => [
+            day.date,
+            routine.sessionType ?? "-",
+            routine.focus ?? "-",
+            index + 1,
+            exercise.name,
+            exercise.sets ?? "-",
+            exercise.reps ?? "-",
+            exercise.load ?? "-",
+            exercise.rpe ?? "-",
+            exercise.notes ?? "-",
+        ] satisfies SpreadsheetCell[]);
+    });
+
+    addSpacer();
+    addSection("Plan del periodo");
+    addTable(
+        ["📅 Fecha", "Tipo", "Focus", "Orden", "Ejercicio", "Sets", "Reps", "Carga", "RPE", "Notas"],
+        planRows,
+        "No hay rutina planeada para este periodo.",
+    );
+
+    addSpacer(10);
+    addMergedRow(
+        "Las pestañas siguientes conservan los datos normalizados completos para análisis, filtros y auditoría.",
+        11,
+        22,
+    );
+
+    return {
+        kind: "visual",
+        name: "Reporte visual",
+        columnWidths: [
+            17, 20, 14, 14, 14, 14,
+            17, 20, 14, 14, 14, 14,
+            17, 20, 14, 14, 14, 14,
+            17, 20, 14, 14, 14, 34,
+        ],
+        rows,
+        merges,
+        freezeRows: 2,
+    };
 }
 
 function buildSheets(document: WorkoutReportDocument): SpreadsheetSheet[] {
@@ -829,8 +1415,9 @@ function buildSheets(document: WorkoutReportDocument): SpreadsheetSheet[] {
     }
 
     const sheets: SpreadsheetSheet[] = [
+        buildVisualReportSheet(document),
         {
-            name: "Resumen",
+            name: "Resumen técnico",
             columns: [
                 { key: "field", header: "Campo", width: 30 },
                 { key: "value", header: "Valor", width: 48 },

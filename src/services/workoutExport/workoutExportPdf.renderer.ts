@@ -1,36 +1,72 @@
 // /src/services/workoutExport/workoutExportPdf.renderer.ts
-// Dependency-free, readable PDF renderer for complete workout reports.
+// Styled, dependency-free PDF renderer for complete workout reports.
 
 import type {
-    JsonValue,
     WorkoutReportDay,
     WorkoutReportDocument,
+    WorkoutReportRoutePoint,
     WorkoutReportSession,
 } from "../../types/workoutExport.types";
 import {
-    formatDuration,
-    formatMinutes,
-    isRecord,
-    readStringFrom,
-    round,
-    safeJsonStringify,
-} from "./workoutExport.utils";
+    buildDayMetrics,
+    buildSleepMetrics,
+    formatReportDateLong,
+    formatReportDateTime,
+    formatReportDuration,
+    formatReportMinutes,
+    formatReportNumber,
+    formatReportPace,
+    formatReportPercent,
+    formatReportTime,
+    getSessionCadenceRpm,
+    getSessionDistanceKm,
+    getSessionElevationM,
+    getSessionMetaText,
+    getSessionPaceSecPerKm,
+    getSessionRoutePointCount,
+    getSessionSteps,
+} from "./workoutExportPresentation.utils";
+import { safeJsonStringify } from "./workoutExport.utils";
 
 type PdfFont = "regular" | "bold";
+type PdfColor = readonly [number, number, number];
 
 type PdfTextOptions = {
     font?: PdfFont;
     size?: number;
-    indent?: number;
-    gapAfter?: number;
-    maxChars?: number;
+    color?: PdfColor;
 };
 
-const PAGE_WIDTH = 595;
-const PAGE_HEIGHT = 842;
-const MARGIN_X = 42;
-const TOP_Y = 794;
-const BOTTOM_Y = 48;
+type PdfTableOptions = {
+    title: string;
+    headers: readonly string[];
+    rows: readonly (readonly string[])[];
+    widths: readonly number[];
+    fontSize?: number;
+    emptyMessage?: string;
+    maxLinesPerCell?: number;
+};
+
+const PAGE_WIDTH = 842;
+const PAGE_HEIGHT = 595;
+const MARGIN_X = 32;
+const TOP_Y = 558;
+const BOTTOM_Y = 34;
+const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_X * 2;
+
+const COLOR_BRAND: PdfColor = [0.545, 0.361, 0.965];
+const COLOR_BRAND_DARK: PdfColor = [0.424, 0.157, 0.851];
+const COLOR_DARK: PdfColor = [0.09, 0.125, 0.2];
+const COLOR_TEXT: PdfColor = [0.15, 0.18, 0.24];
+const COLOR_MUTED: PdfColor = [0.39, 0.45, 0.55];
+const COLOR_BORDER: PdfColor = [0.82, 0.86, 0.91];
+const COLOR_PANEL: PdfColor = [0.97, 0.965, 1];
+const COLOR_HEADER: PdfColor = [0.91, 0.97, 0.96];
+const COLOR_ALT: PdfColor = [0.975, 0.98, 0.99];
+const COLOR_WHITE: PdfColor = [1, 1, 1];
+const COLOR_GREEN: PdfColor = [0.12, 0.65, 0.42];
+const COLOR_RED: PdfColor = [0.9, 0.2, 0.25];
+const COLOR_ROUTE: PdfColor = [0.49, 0.25, 0.88];
 
 function normalizePdfText(value: string): string {
     return value
@@ -42,10 +78,25 @@ function normalizePdfText(value: string): string {
 }
 
 function hexPdfText(value: string): string {
-    return Buffer.from(normalizePdfText(value), "latin1").toString("hex").toUpperCase();
+    return Buffer.from(normalizePdfText(value), "latin1")
+        .toString("hex")
+        .toUpperCase();
 }
 
-function wrapText(value: string, maxChars: number): string[] {
+function colorCommand(color: PdfColor, stroke = false): string {
+    const [red, green, blue] = color;
+    return `${red} ${green} ${blue} ${stroke ? "RG" : "rg"}`;
+}
+
+function approximateChars(width: number, fontSize: number): number {
+    return Math.max(4, Math.floor(width / Math.max(3.5, fontSize * 0.53)));
+}
+
+function wrapText(
+    value: string,
+    maxChars: number,
+    maxLines?: number,
+): string[] {
     const normalized = value.trim();
     if (!normalized) return [""];
 
@@ -56,24 +107,24 @@ function wrapText(value: string, maxChars: number): string[] {
         let line = "";
 
         for (const word of words) {
-            if (word.length > maxChars) {
-                if (line) {
-                    output.push(line);
-                    line = "";
-                }
+            const chunks: string[] = [];
 
+            if (word.length > maxChars) {
                 for (let index = 0; index < word.length; index += maxChars) {
-                    output.push(word.slice(index, index + maxChars));
+                    chunks.push(word.slice(index, index + maxChars));
                 }
-                continue;
+            } else {
+                chunks.push(word);
             }
 
-            const candidate = line ? `${line} ${word}` : word;
-            if (candidate.length <= maxChars) {
-                line = candidate;
-            } else {
-                output.push(line);
-                line = word;
+            for (const chunk of chunks) {
+                const candidate = line ? `${line} ${chunk}` : chunk;
+                if (candidate.length <= maxChars) {
+                    line = candidate;
+                } else {
+                    if (line) output.push(line);
+                    line = chunk;
+                }
             }
         }
 
@@ -81,24 +132,39 @@ function wrapText(value: string, maxChars: number): string[] {
         if (words.length === 0) output.push("");
     }
 
+    if (maxLines && output.length > maxLines) {
+        const limited = output.slice(0, maxLines);
+        const lastIndex = limited.length - 1;
+        limited[lastIndex] = `${limited[lastIndex].slice(0, Math.max(1, maxChars - 3))}...`;
+        return limited;
+    }
+
     return output;
 }
 
-function formatNumber(value: number | null, suffix = "", decimals = 1): string {
-    return value === null ? "-" : `${round(value, decimals)}${suffix}`;
-}
-
-function quantityLabel(
-    value: number,
-    singular: string,
-    plural: string,
-): string {
-    return `${value} ${value === 1 ? singular : plural}`;
-}
-
-function readMeta(session: WorkoutReportSession, key: string): string | null {
-    if (!isRecord(session.meta)) return null;
-    return readStringFrom(session.meta, key);
+function sessionMetricRows(
+    session: WorkoutReportSession,
+): readonly (readonly [string, string])[] {
+    return [
+        ["Duración", formatReportDuration(session.durationSeconds)],
+        ["Media", String(session.media.length)],
+        ["Kcal activas", formatReportNumber(session.activeKcal, 1, " kcal")],
+        ["Kcal totales", formatReportNumber(session.totalKcal, 1, " kcal")],
+        ["FC promedio", formatReportNumber(session.avgHr, 0, " bpm")],
+        ["FC máxima", formatReportNumber(session.maxHr, 0, " bpm")],
+        ["Pasos", formatReportNumber(getSessionSteps(session), 0)],
+        ["Distancia", formatReportNumber(getSessionDistanceKm(session), 2, " km")],
+        ["Elevación", formatReportNumber(getSessionElevationM(session), 1, " m")],
+        ["Ritmo", formatReportPace(getSessionPaceSecPerKm(session))],
+        ["Cadencia", formatReportNumber(getSessionCadenceRpm(session), 0, " rpm")],
+        ["RPE", formatReportNumber(session.effortRpe, 1)],
+        ["Inicio", formatReportTime(session.startAt)],
+        ["Fin", formatReportTime(session.endAt)],
+        ["Fuente", getSessionMetaText(session, "source") ?? "-"],
+        ["Dispositivo", getSessionMetaText(session, "sourceDevice") ?? "-"],
+        ["Session kind", getSessionMetaText(session, "sessionKind") ?? "-"],
+        ["Puntos de ruta", String(getSessionRoutePointCount(session))],
+    ];
 }
 
 class PdfLayout {
@@ -109,63 +175,554 @@ class PdfLayout {
         return this.pages[this.pages.length - 1];
     }
 
-    private ensureSpace(requiredHeight: number): void {
-        if (this.currentY - requiredHeight >= BOTTOM_Y) return;
-        this.newPage();
+    get y(): number {
+        return this.currentY;
+    }
+
+    set y(value: number) {
+        this.currentY = value;
     }
 
     private newPage(): void {
         this.pages.push([]);
         this.currentY = TOP_Y;
+        this.drawPageBrand();
     }
 
-    addText(value: string, options: PdfTextOptions = {}): void {
-        const font = options.font ?? "regular";
-        const size = options.size ?? 10;
-        const indent = options.indent ?? 0;
-        const gapAfter = options.gapAfter ?? 3;
-        const lineHeight = Math.max(11, size * 1.32);
-        const maxChars = options.maxChars ?? Math.max(30, Math.floor((94 - indent / 5) * (10 / size)));
-        const lines = wrapText(value, maxChars);
-
-        for (const line of lines) {
-            this.ensureSpace(lineHeight + gapAfter);
-            const fontRef = font === "bold" ? "/F2" : "/F1";
-            const x = MARGIN_X + indent;
-            const text = hexPdfText(line || " ");
-            this.currentPage.push(`BT ${fontRef} ${size} Tf ${x} ${this.currentY} Td <${text}> Tj ET`);
-            this.currentY -= lineHeight;
-        }
-
-        this.currentY -= gapAfter;
+    private drawPageBrand(): void {
+        this.drawTextAt("WORKOUT APP", MARGIN_X, PAGE_HEIGHT - 24, {
+            font: "bold",
+            size: 8,
+            color: COLOR_BRAND_DARK,
+        });
+        this.drawLine(
+            MARGIN_X,
+            PAGE_HEIGHT - 29,
+            PAGE_WIDTH - MARGIN_X,
+            PAGE_HEIGHT - 29,
+            COLOR_BORDER,
+            0.5,
+        );
     }
 
-    addHeading(value: string, size = 14): void {
-        this.ensureSpace(size * 2.2);
-        this.addText(value, { font: "bold", size, gapAfter: 5, maxChars: 72 });
-        this.addRule();
-    }
-
-    addRule(): void {
-        this.ensureSpace(8);
-        this.currentPage.push(`q 0.75 G 0.7 w ${MARGIN_X} ${this.currentY + 3} m ${PAGE_WIDTH - MARGIN_X} ${this.currentY + 3} l S Q`);
-        this.currentY -= 7;
-    }
-
-    addSpacer(height = 6): void {
-        this.ensureSpace(height);
-        this.currentY -= height;
-    }
-
-    /**
-     * Keeps a short section heading together with its first content lines.
-     */
-    reserveSpace(requiredHeight: number): void {
-        this.ensureSpace(requiredHeight);
+    ensureSpace(requiredHeight: number): void {
+        if (this.currentY - requiredHeight >= BOTTOM_Y) return;
+        this.newPage();
     }
 
     forcePageBreak(): void {
         if (this.currentPage.length > 0) this.newPage();
+    }
+
+    addSpacer(height = 8): void {
+        this.ensureSpace(height);
+        this.currentY -= height;
+    }
+
+    drawTextAt(
+        value: string,
+        x: number,
+        y: number,
+        options: PdfTextOptions = {},
+    ): void {
+        const fontRef = options.font === "bold" ? "/F2" : "/F1";
+        const size = options.size ?? 9;
+        const color = options.color ?? COLOR_TEXT;
+        this.currentPage.push(
+            `q ${colorCommand(color)} BT ${fontRef} ${size} Tf ${x} ${y} Td <${hexPdfText(value || " ")}> Tj ET Q`,
+        );
+    }
+
+    drawRect(
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        fill: PdfColor,
+        stroke: PdfColor = COLOR_BORDER,
+        lineWidth = 0.6,
+    ): void {
+        this.currentPage.push(
+            `q ${colorCommand(fill)} ${colorCommand(stroke, true)} ${lineWidth} w ${x} ${y} ${width} ${height} re B Q`,
+        );
+    }
+
+    drawLine(
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        color: PdfColor = COLOR_BORDER,
+        lineWidth = 0.6,
+    ): void {
+        this.currentPage.push(
+            `q ${colorCommand(color, true)} ${lineWidth} w ${x1} ${y1} m ${x2} ${y2} l S Q`,
+        );
+    }
+
+    drawCircle(
+        x: number,
+        y: number,
+        radius: number,
+        fill: PdfColor,
+    ): void {
+        const control = radius * 0.5522847498;
+        this.currentPage.push(
+            `q ${colorCommand(fill)} ${x + radius} ${y} m ` +
+            `${x + radius} ${y + control} ${x + control} ${y + radius} ${x} ${y + radius} c ` +
+            `${x - control} ${y + radius} ${x - radius} ${y + control} ${x - radius} ${y} c ` +
+            `${x - radius} ${y - control} ${x - control} ${y - radius} ${x} ${y - radius} c ` +
+            `${x + control} ${y - radius} ${x + radius} ${y - control} ${x + radius} ${y} c f Q`,
+        );
+    }
+
+    addSectionTitle(title: string): void {
+        this.ensureSpace(30);
+        this.drawRect(
+            MARGIN_X,
+            this.currentY - 24,
+            CONTENT_WIDTH,
+            24,
+            COLOR_DARK,
+            COLOR_DARK,
+            0,
+        );
+        this.drawTextAt(title, MARGIN_X + 10, this.currentY - 16, {
+            font: "bold",
+            size: 11,
+            color: COLOR_WHITE,
+        });
+        this.currentY -= 30;
+    }
+
+    addParagraph(
+        value: string,
+        options: PdfTextOptions & { indent?: number; gapAfter?: number } = {},
+    ): void {
+        const size = options.size ?? 8.5;
+        const indent = options.indent ?? 0;
+        const gapAfter = options.gapAfter ?? 4;
+        const width = CONTENT_WIDTH - indent;
+        const lines = wrapText(value, approximateChars(width, size));
+        const lineHeight = size * 1.35;
+        this.ensureSpace(lines.length * lineHeight + gapAfter);
+
+        lines.forEach((line) => {
+            this.drawTextAt(line, MARGIN_X + indent, this.currentY - size, options);
+            this.currentY -= lineHeight;
+        });
+        this.currentY -= gapAfter;
+    }
+
+    addKpiCards(
+        items: readonly { label: string; value: string }[],
+    ): void {
+        const columns = 6;
+        const gap = 6;
+        const cardWidth = (CONTENT_WIDTH - gap * (columns - 1)) / columns;
+        const cardHeight = 52;
+        const rowsNeeded = Math.ceil(items.length / columns);
+        this.ensureSpace(rowsNeeded * (cardHeight + gap));
+
+        items.forEach((item, index) => {
+            const row = Math.floor(index / columns);
+            const column = index % columns;
+            const x = MARGIN_X + column * (cardWidth + gap);
+            const y = this.currentY - row * (cardHeight + gap) - cardHeight;
+            this.drawRect(x, y, cardWidth, cardHeight, COLOR_PANEL, COLOR_BORDER);
+            this.drawTextAt(item.label, x + 8, y + cardHeight - 15, {
+                font: "bold",
+                size: 7.2,
+                color: COLOR_MUTED,
+            });
+            this.drawTextAt(item.value, x + 8, y + 15, {
+                font: "bold",
+                size: 12,
+                color: COLOR_DARK,
+            });
+        });
+
+        this.currentY -= rowsNeeded * (cardHeight + gap);
+    }
+
+    addTable(options: PdfTableOptions): void {
+        const fontSize = options.fontSize ?? 7;
+        const maxLines = options.maxLinesPerCell ?? 3;
+        const lineHeight = fontSize * 1.22;
+        const paddingX = 4;
+        const paddingY = 4;
+        const totalWidth = options.widths.reduce((sum, width) => sum + width, 0);
+        const scale = CONTENT_WIDTH / totalWidth;
+        const widths = options.widths.map((width) => width * scale);
+
+        this.addSectionTitle(options.title);
+
+        const drawHeader = (): void => {
+            const headerLines = options.headers.map((header, index) =>
+                wrapText(
+                    header,
+                    approximateChars(widths[index] - paddingX * 2, fontSize),
+                    3,
+                ),
+            );
+            const headerHeight = Math.max(
+                24,
+                ...headerLines.map((lines) => lines.length * lineHeight + paddingY * 2),
+            );
+            this.ensureSpace(headerHeight + 12);
+            let x = MARGIN_X;
+
+            headerLines.forEach((lines, index) => {
+                this.drawRect(
+                    x,
+                    this.currentY - headerHeight,
+                    widths[index],
+                    headerHeight,
+                    COLOR_HEADER,
+                    COLOR_BORDER,
+                );
+                lines.forEach((line, lineIndex) => {
+                    this.drawTextAt(
+                        line,
+                        x + paddingX,
+                        this.currentY - paddingY - fontSize - lineIndex * lineHeight,
+                        { font: "bold", size: fontSize, color: COLOR_DARK },
+                    );
+                });
+                x += widths[index];
+            });
+            this.currentY -= headerHeight;
+        };
+
+        drawHeader();
+
+        if (options.rows.length === 0) {
+            const rowHeight = 24;
+            this.drawRect(
+                MARGIN_X,
+                this.currentY - rowHeight,
+                CONTENT_WIDTH,
+                rowHeight,
+                COLOR_ALT,
+                COLOR_BORDER,
+            );
+            this.drawTextAt(
+                options.emptyMessage ?? "Sin registros.",
+                MARGIN_X + 6,
+                this.currentY - 16,
+                { size: 7.5, color: COLOR_MUTED },
+            );
+            this.currentY -= rowHeight + 8;
+            return;
+        }
+
+        options.rows.forEach((row, rowIndex) => {
+            const cellLines = row.map((value, index) =>
+                wrapText(
+                    value,
+                    approximateChars(widths[index] - paddingX * 2, fontSize),
+                    maxLines,
+                ),
+            );
+            const rowHeight = Math.max(
+                22,
+                ...cellLines.map((lines) => lines.length * lineHeight + paddingY * 2),
+            );
+
+            if (this.currentY - rowHeight < BOTTOM_Y) {
+                this.forcePageBreak();
+                drawHeader();
+            }
+
+            let x = MARGIN_X;
+            const fill = rowIndex % 2 === 0 ? COLOR_WHITE : COLOR_ALT;
+
+            cellLines.forEach((lines, index) => {
+                this.drawRect(
+                    x,
+                    this.currentY - rowHeight,
+                    widths[index],
+                    rowHeight,
+                    fill,
+                    COLOR_BORDER,
+                );
+                lines.forEach((line, lineIndex) => {
+                    this.drawTextAt(
+                        line,
+                        x + paddingX,
+                        this.currentY - paddingY - fontSize - lineIndex * lineHeight,
+                        {
+                            font: index === 0 ? "bold" : "regular",
+                            size: fontSize,
+                            color: COLOR_TEXT,
+                        },
+                    );
+                });
+                x += widths[index];
+            });
+            this.currentY -= rowHeight;
+        });
+
+        this.currentY -= 8;
+    }
+
+    addRoutePreview(
+        points: readonly WorkoutReportRoutePoint[],
+        session: WorkoutReportSession,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+    ): void {
+        this.drawRect(x, y, width, height, COLOR_ALT, COLOR_BORDER);
+        this.drawTextAt("Vista de ruta", x + 8, y + height - 14, {
+            font: "bold",
+            size: 8,
+            color: COLOR_DARK,
+        });
+        this.drawTextAt(
+            `${getSessionRoutePointCount(session)} puntos (sin mapa base)`,
+            x + 8,
+            y + height - 27,
+            { size: 6.8, color: COLOR_MUTED },
+        );
+
+        const routePoints = points.length >= 2
+            ? points
+            : (() => {
+                const startLatitude = session.routeSummary?.startLatitude;
+                const startLongitude = session.routeSummary?.startLongitude;
+                const endLatitude = session.routeSummary?.endLatitude;
+                const endLongitude = session.routeSummary?.endLongitude;
+
+                if (
+                    startLatitude === null ||
+                    startLatitude === undefined ||
+                    startLongitude === null ||
+                    startLongitude === undefined ||
+                    endLatitude === null ||
+                    endLatitude === undefined ||
+                    endLongitude === null ||
+                    endLongitude === undefined
+                ) {
+                    return [];
+                }
+
+                return [
+                    {
+                        latitude: startLatitude,
+                        longitude: startLongitude,
+                        altitudeM: null,
+                        accuracyM: null,
+                        speedMps: null,
+                        headingDeg: null,
+                        recordedAt: null,
+                    },
+                    {
+                        latitude: endLatitude,
+                        longitude: endLongitude,
+                        altitudeM: null,
+                        accuracyM: null,
+                        speedMps: null,
+                        headingDeg: null,
+                        recordedAt: null,
+                    },
+                ];
+            })();
+
+        if (routePoints.length < 2) {
+            this.drawTextAt(
+                "Ruta disponible sin geometría suficiente.",
+                x + 8,
+                y + 18,
+                { size: 7, color: COLOR_MUTED },
+            );
+            return;
+        }
+
+        const minLatitude = Math.min(...routePoints.map((point) => point.latitude));
+        const maxLatitude = Math.max(...routePoints.map((point) => point.latitude));
+        const minLongitude = Math.min(...routePoints.map((point) => point.longitude));
+        const maxLongitude = Math.max(...routePoints.map((point) => point.longitude));
+        const latitudeSpan = Math.max(0.000001, maxLatitude - minLatitude);
+        const longitudeSpan = Math.max(0.000001, maxLongitude - minLongitude);
+        const plotX = x + 10;
+        const plotY = y + 10;
+        const plotWidth = width - 20;
+        const plotHeight = height - 48;
+        const projected = routePoints.map((point) => ({
+            x: plotX + ((point.longitude - minLongitude) / longitudeSpan) * plotWidth,
+            y: plotY + ((point.latitude - minLatitude) / latitudeSpan) * plotHeight,
+        }));
+        const commands = projected
+            .map((point, index) =>
+                index === 0
+                    ? `${point.x} ${point.y} m`
+                    : `${point.x} ${point.y} l`,
+            )
+            .join(" ");
+
+        this.currentPage.push(
+            `q ${colorCommand(COLOR_ROUTE, true)} 2 w 1 J 1 j ${commands} S Q`,
+        );
+        this.drawCircle(projected[0].x, projected[0].y, 3.5, COLOR_GREEN);
+        this.drawCircle(
+            projected[projected.length - 1].x,
+            projected[projected.length - 1].y,
+            3.5,
+            COLOR_RED,
+        );
+    }
+
+    addSessionCard(
+        date: string,
+        session: WorkoutReportSession,
+        sessionIndex: number,
+        document: WorkoutReportDocument,
+    ): void {
+        const hasRoute = getSessionRoutePointCount(session) > 0;
+        const cardHeight = hasRoute ? 178 : 150;
+        this.ensureSpace(cardHeight + 14);
+
+        const cardX = MARGIN_X;
+        const cardY = this.currentY - cardHeight;
+        this.drawRect(cardX, cardY, CONTENT_WIDTH, cardHeight, COLOR_WHITE, COLOR_BORDER);
+        this.drawRect(
+            cardX,
+            cardY + cardHeight - 28,
+            CONTENT_WIDTH,
+            28,
+            COLOR_PANEL,
+            COLOR_BORDER,
+        );
+        this.drawTextAt(
+            `${sessionIndex + 1}. ${session.type}`,
+            cardX + 10,
+            cardY + cardHeight - 18,
+            { font: "bold", size: 10.5, color: COLOR_DARK },
+        );
+        this.drawTextAt(
+            `${formatReportDateLong(date)} | ${session.activityType ?? "Sesión"}`,
+            cardX + 260,
+            cardY + cardHeight - 18,
+            { size: 7.5, color: COLOR_MUTED },
+        );
+
+        const metrics = sessionMetricRows(session);
+        const detailWidth = hasRoute ? CONTENT_WIDTH * 0.61 : CONTENT_WIDTH - 20;
+        const routeWidth = hasRoute ? CONTENT_WIDTH * 0.35 : 0;
+        const columns = 3;
+        const metricGap = 5;
+        const metricWidth = (detailWidth - 20 - metricGap * (columns - 1)) / columns;
+        const metricHeight = 19;
+        const startX = cardX + 10;
+        const startY = cardY + cardHeight - 36;
+
+        metrics.forEach(([label, value], index) => {
+            const row = Math.floor(index / columns);
+            const column = index % columns;
+            const x = startX + column * (metricWidth + metricGap);
+            const y = startY - (row + 1) * metricHeight;
+            this.drawRect(
+                x,
+                y,
+                metricWidth,
+                metricHeight - 2,
+                COLOR_ALT,
+                COLOR_BORDER,
+                0.35,
+            );
+            this.drawTextAt(label, x + 5, y + 7, {
+                font: "bold",
+                size: 6.2,
+                color: COLOR_MUTED,
+            });
+            this.drawTextAt(
+                value,
+                x + Math.min(metricWidth * 0.48, 62),
+                y + 7,
+                { font: "bold", size: 6.5, color: COLOR_DARK },
+            );
+        });
+
+        if (hasRoute) {
+            this.addRoutePreview(
+                session.routePoints,
+                session,
+                cardX + CONTENT_WIDTH - routeWidth - 10,
+                cardY + 10,
+                routeWidth,
+                cardHeight - 48,
+            );
+        }
+
+        if (session.notes) {
+            const note = wrapText(session.notes, 90, 2).join(" ");
+            this.drawTextAt(`Notas: ${note}`, cardX + 10, cardY + 8, {
+                size: 6.5,
+                color: COLOR_MUTED,
+            });
+        }
+
+        this.currentY -= cardHeight + 10;
+
+        if (session.exercises.length > 0) {
+            this.addTable({
+                title: `Ejercicios - ${session.type}`,
+                headers: ["Orden", "Ejercicio", "Movimiento", "Sets", "Notas"],
+                rows: session.exercises.map((exercise, index) => [
+                    String(index + 1),
+                    exercise.name,
+                    exercise.movementName ?? "-",
+                    String(exercise.sets.length),
+                    exercise.notes ?? "-",
+                ]),
+                widths: [8, 25, 24, 8, 35],
+                fontSize: 7,
+                maxLinesPerCell: 3,
+            });
+
+            const setRows = session.exercises.flatMap((exercise) =>
+                exercise.sets.map((set) => [
+                    exercise.name,
+                    String(set.setIndex),
+                    set.reps === null ? "-" : String(set.reps),
+                    set.weight === null ? "-" : `${set.weight} ${set.unit}`,
+                    set.rpe === null ? "-" : String(set.rpe),
+                    set.tempo ?? "-",
+                    set.restSec === null ? "-" : String(set.restSec),
+                    set.isWarmup ? "Sí" : "No",
+                    set.isDropSet ? "Sí" : "No",
+                ]),
+            );
+
+            this.addTable({
+                title: `Sets - ${session.type}`,
+                headers: ["Ejercicio", "Set", "Reps", "Peso", "RPE", "Tempo", "Descanso", "Warmup", "Drop"],
+                rows: setRows,
+                widths: [28, 7, 8, 12, 7, 10, 10, 9, 9],
+                fontSize: 6.8,
+                maxLinesPerCell: 2,
+            });
+        }
+
+        if (session.media.length > 0) {
+            this.addTable({
+                title: `Media - ${session.type}`,
+                headers: ["Tipo", "Formato", "Creado", "URL"],
+                rows: session.media.map((media) => [
+                    media.resourceType,
+                    media.format ?? "-",
+                    formatReportDateTime(media.createdAt),
+                    document.options.includeMediaLinks
+                        ? media.url
+                        : "Oculto por configuración",
+                ]),
+                widths: [12, 12, 18, 58],
+                fontSize: 6.5,
+                maxLinesPerCell: 3,
+            });
+        }
     }
 
     render(): Buffer {
@@ -187,12 +744,27 @@ function buildPdf(pageStreams: readonly string[][]): Buffer {
             "latin1",
         ),
     );
-    objects.set(3, Buffer.from("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>", "latin1"));
-    objects.set(4, Buffer.from("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>", "latin1"));
+    objects.set(
+        3,
+        Buffer.from(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            "latin1",
+        ),
+    );
+    objects.set(
+        4,
+        Buffer.from(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+            "latin1",
+        ),
+    );
 
     pageStreams.forEach((commands, index) => {
         const pageNumber = index + 1;
-        const footer = `BT /F1 8 Tf ${PAGE_WIDTH - 90} 24 Td <${hexPdfText(`Página ${pageNumber} de ${pageCount}`)}> Tj ET`;
+        const footer = [
+            `q ${colorCommand(COLOR_MUTED)} BT /F1 7 Tf ${MARGIN_X} 19 Td <${hexPdfText("Workout App - Exportación completa")}> Tj ET Q`,
+            `q ${colorCommand(COLOR_MUTED)} BT /F1 7 Tf ${PAGE_WIDTH - 95} 19 Td <${hexPdfText(`Página ${pageNumber} de ${pageCount}`)}> Tj ET Q`,
+        ].join("\n");
         const streamText = `${commands.join("\n")}\n${footer}`;
         const streamBuffer = Buffer.from(streamText, "latin1");
         const pageObject = pageObjectNumbers[index];
@@ -224,7 +796,6 @@ function buildPdf(pageStreams: readonly string[][]): Buffer {
         const body = objects.get(objectNumber) ?? Buffer.from("<<>>", "latin1");
         const prefix = Buffer.from(`${objectNumber} 0 obj\n`, "latin1");
         const suffix = Buffer.from("\nendobj\n", "latin1");
-
         offsets[objectNumber] = currentOffset;
         parts.push(prefix, body, suffix);
         currentOffset += prefix.length + body.length + suffix.length;
@@ -247,168 +818,295 @@ function buildPdf(pageStreams: readonly string[][]): Buffer {
     return Buffer.concat(parts);
 }
 
-function addSummary(layout: PdfLayout, document: WorkoutReportDocument): void {
-    const { summary, user, range, generatedAt } = document;
+function addReportHeader(
+    layout: PdfLayout,
+    document: WorkoutReportDocument,
+): void {
+    layout.drawRect(
+        0,
+        PAGE_HEIGHT - 92,
+        PAGE_WIDTH,
+        92,
+        COLOR_BRAND,
+        COLOR_BRAND,
+        0,
+    );
+    layout.drawTextAt("WORKOUT APP", MARGIN_X, PAGE_HEIGHT - 28, {
+        font: "bold",
+        size: 10,
+        color: COLOR_WHITE,
+    });
+    layout.drawTextAt("Reporte completo de actividad", MARGIN_X, PAGE_HEIGHT - 55, {
+        font: "bold",
+        size: 22,
+        color: COLOR_WHITE,
+    });
+    layout.drawTextAt(document.range.label, MARGIN_X, PAGE_HEIGHT - 75, {
+        size: 10,
+        color: COLOR_WHITE,
+    });
+    layout.y = PAGE_HEIGHT - 108;
 
-    layout.addText("WORKOUT APP", { font: "bold", size: 12, gapAfter: 2 });
-    layout.addText("Reporte completo de actividad", { font: "bold", size: 22, gapAfter: 7, maxChars: 50 });
-    layout.addText(`Usuario: ${user.name}${user.email ? ` (${user.email})` : ""}`, { size: 10 });
-    layout.addText(`Periodo: ${range.label}`, { size: 10 });
-    layout.addText(`Generado: ${generatedAt}`, { size: 9, gapAfter: 9 });
-    layout.addHeading("Resumen", 15);
-    layout.addText(`Días del periodo: ${summary.calendarDays} | Días con datos: ${summary.daysWithData}`);
-    layout.addText(`Sueño registrado: ${quantityLabel(summary.daysWithSleep, "día", "días")} | Entrenamiento: ${quantityLabel(summary.trainingDays, "día", "días")}`);
-    layout.addText(`Sesiones: ${summary.sessions} | Ejercicios: ${summary.exercises} | Sets: ${summary.sets}`);
-    layout.addText(`Duración total: ${formatDuration(summary.totalDurationSeconds)}`);
-    layout.addText(`Calorías activas: ${formatNumber(summary.totalActiveKcal, " kcal", 1)} | Calorías totales: ${formatNumber(summary.totalKcal, " kcal", 1)}`);
-    layout.addText(`Distancia: ${formatNumber(summary.totalDistanceKm, " km", 2)} | Pasos: ${formatNumber(summary.totalSteps, "", 0)}`);
-    layout.addText(`Sueño promedio: ${formatMinutes(summary.averageSleepMinutes)} | Sleep Score promedio: ${formatNumber(summary.averageSleepScore, "", 1)}`);
-    layout.addSpacer(8);
+    const metadata = [
+        ["Usuario", document.user.name],
+        ["Correo", document.user.email || "-"],
+        ["Desde", document.range.from],
+        ["Hasta", document.range.to],
+        ["Generado", formatReportDateTime(document.generatedAt)],
+    ] as const;
+    const gap = 6;
+    const itemWidth = (CONTENT_WIDTH - gap * (metadata.length - 1)) / metadata.length;
+
+    metadata.forEach(([label, value], index) => {
+        const x = MARGIN_X + index * (itemWidth + gap);
+        layout.drawRect(x, layout.y - 43, itemWidth, 43, COLOR_PANEL, COLOR_BORDER);
+        layout.drawTextAt(label, x + 7, layout.y - 14, {
+            font: "bold",
+            size: 6.8,
+            color: COLOR_MUTED,
+        });
+        const lines = wrapText(value, approximateChars(itemWidth - 14, 8), 2);
+        lines.forEach((line, lineIndex) => {
+            layout.drawTextAt(line, x + 7, layout.y - 29 - lineIndex * 9, {
+                font: "bold",
+                size: 8,
+                color: COLOR_DARK,
+            });
+        });
+    });
+    layout.y -= 52;
 }
 
-function addSleep(layout: PdfLayout, day: WorkoutReportDay): void {
-    if (!day.sleep) return;
+function addSummary(
+    layout: PdfLayout,
+    document: WorkoutReportDocument,
+): void {
+    const { summary } = document;
+    const periodSessions = document.days.flatMap(
+        (day) => day.training?.sessions ?? [],
+    );
+    const hasActiveKcal = periodSessions.some(
+        (session) => session.activeKcal !== null,
+    );
+    const hasTotalKcal = periodSessions.some(
+        (session) => session.totalKcal !== null,
+    );
+    const hasDistance = periodSessions.some(
+        (session) => getSessionDistanceKm(session) !== null,
+    );
+    const hasSteps = periodSessions.some(
+        (session) => getSessionSteps(session) !== null,
+    );
 
-    const sleep = day.sleep;
-    layout.addText("Sueño", { font: "bold", size: 12, gapAfter: 3 });
-    layout.addText(`Dormido: ${formatMinutes(sleep.timeAsleepMinutes)} | En cama: ${formatMinutes(sleep.timeInBedMinutes)} | Score: ${formatNumber(sleep.score, "", 0)}`, { indent: 8 });
-    layout.addText(`Awake: ${formatMinutes(sleep.awakeMinutes)} | REM: ${formatMinutes(sleep.remMinutes)} | Core: ${formatMinutes(sleep.coreMinutes)} | Deep: ${formatMinutes(sleep.deepMinutes)}`, { indent: 8 });
-    layout.addText(`Fuente: ${sleep.source ?? "-"} | Dispositivo: ${sleep.sourceDevice ?? "-"}`, { indent: 8 });
+    layout.addSectionTitle("Resumen del periodo");
+    layout.addKpiCards([
+        { label: "Días con datos", value: `${summary.daysWithData} / ${summary.calendarDays}` },
+        { label: "Días con sueño", value: String(summary.daysWithSleep) },
+        { label: "Días entrenados", value: String(summary.trainingDays) },
+        { label: "Sesiones", value: String(summary.sessions) },
+        { label: "Ejercicios", value: String(summary.exercises) },
+        { label: "Sets", value: String(summary.sets) },
+        { label: "Duración total", value: formatReportDuration(summary.totalDurationSeconds) },
+        { label: "Kcal activas", value: formatReportNumber(hasActiveKcal ? summary.totalActiveKcal : null, 1, " kcal") },
+        { label: "Kcal totales", value: formatReportNumber(hasTotalKcal ? summary.totalKcal : null, 1, " kcal") },
+        { label: "Distancia", value: formatReportNumber(hasDistance ? summary.totalDistanceKm : null, 2, " km") },
+        { label: "Pasos", value: formatReportNumber(hasSteps ? summary.totalSteps : null, 0) },
+        { label: "Sueño promedio", value: formatReportMinutes(summary.averageSleepMinutes) },
+    ]);
 
-    if (sleep.importedAt || sleep.lastSyncedAt) {
-        layout.addText(`Importado: ${sleep.importedAt ?? "-"} | Última sync: ${sleep.lastSyncedAt ?? "-"}`, { indent: 8 });
-    }
+    const dayMetrics = document.days.map(buildDayMetrics);
+    layout.addTable({
+        title: document.days.length === 1 ? "KPIs del día" : "KPIs por día",
+        headers: ["Fecha", "Entrenamiento", "Kcal act.", "Kcal tot.", "Sesiones", "Gym", "Cardio", "Media", "Sueño", "Score"],
+        rows: dayMetrics.map((metrics) => [
+            metrics.dateLabel,
+            formatReportDuration(metrics.durationSeconds),
+            formatReportNumber(metrics.activeKcal, 1),
+            formatReportNumber(metrics.totalKcal, 1),
+            String(metrics.sessionCount),
+            String(metrics.gymSessionCount),
+            String(metrics.cardioSessionCount),
+            String(metrics.mediaCount),
+            formatReportMinutes(metrics.sleepMinutes),
+            formatReportNumber(metrics.sleepScore, 0),
+        ]),
+        widths: [18, 13, 10, 10, 9, 7, 8, 7, 12, 7],
+        fontSize: 6.8,
+        maxLinesPerCell: 2,
+    });
+
+    const sleepMetrics = document.days
+        .map(buildSleepMetrics)
+        .filter((metrics): metrics is NonNullable<ReturnType<typeof buildSleepMetrics>> => metrics !== null);
+    layout.addTable({
+        title: document.days.length === 1
+            ? "Detalle de sueño del día"
+            : "Detalle de sueño por día",
+        headers: ["Fecha", "Dormido", "En cama", "Score", "Efic.", "Readiness", "REM %", "Deep %", "Ligero", "Despierto", "Fuente", "Dispositivo", "Importado", "Última sync"],
+        rows: sleepMetrics.map((metrics) => [
+            metrics.dateLabel,
+            formatReportMinutes(metrics.totalMinutes),
+            formatReportMinutes(metrics.inBedMinutes),
+            formatReportNumber(metrics.score, 0),
+            formatReportPercent(metrics.efficiencyPct),
+            formatReportNumber(metrics.readiness, 0),
+            formatReportPercent(metrics.remPct),
+            formatReportPercent(metrics.deepPct),
+            formatReportMinutes(metrics.coreMinutes),
+            formatReportMinutes(metrics.awakeMinutes),
+            metrics.source ?? "-",
+            metrics.sourceDevice ?? "-",
+            formatReportDateTime(metrics.importedAt),
+            formatReportDateTime(metrics.lastSyncedAt),
+        ]),
+        widths: [14, 8, 8, 6, 7, 8, 7, 7, 8, 8, 8, 11, 10, 10],
+        fontSize: 5.5,
+        emptyMessage: "No hay registros de sueño para este periodo.",
+        maxLinesPerCell: 2,
+    });
+
+    const sessions = document.days.flatMap((day) =>
+        (day.training?.sessions ?? []).map((session) => ({ day, session })),
+    );
+    layout.addTable({
+        title: "Resumen de sesiones",
+        headers: ["Fecha", "Tipo", "Actividad", "Duración", "Kcal act.", "Kcal tot.", "FC prom", "FC máx", "Pasos", "Distancia", "Ritmo", "RPE"],
+        rows: sessions.map(({ day, session }) => [
+            day.date,
+            session.type,
+            session.activityType ?? "-",
+            formatReportDuration(session.durationSeconds),
+            formatReportNumber(session.activeKcal, 1),
+            formatReportNumber(session.totalKcal, 1),
+            formatReportNumber(session.avgHr, 0),
+            formatReportNumber(session.maxHr, 0),
+            formatReportNumber(getSessionSteps(session), 0),
+            formatReportNumber(getSessionDistanceKm(session), 2, " km"),
+            formatReportPace(getSessionPaceSecPerKm(session)),
+            formatReportNumber(session.effortRpe, 1),
+        ]),
+        widths: [12, 19, 12, 11, 9, 9, 8, 8, 8, 10, 12, 7],
+        fontSize: 6.2,
+        emptyMessage: "No hay sesiones registradas para este periodo.",
+        maxLinesPerCell: 2,
+    });
 }
 
-function addSession(layout: PdfLayout, session: WorkoutReportSession, index: number, document: WorkoutReportDocument): void {
-    const source = readMeta(session, "source");
-    const device = readMeta(session, "sourceDevice");
-    const kind = readMeta(session, "sessionKind");
-    const distance = session.distanceKm ?? session.cardioMetrics?.distanceKm ?? null;
-    const steps = session.steps ?? session.cardioMetrics?.steps ?? null;
-    const elevation = session.elevationGainM ?? session.cardioMetrics?.elevationGainM ?? null;
-    const pace = session.paceSecPerKm ?? session.cardioMetrics?.paceSecPerKm ?? null;
-    const avgSpeed = session.cardioMetrics?.avgSpeedKmh ?? null;
-    const maxSpeed = session.cardioMetrics?.maxSpeedKmh ?? null;
-    const cadence = session.cadenceRpm ?? session.cardioMetrics?.cadenceRpm ?? null;
-    const strideLength = session.cardioMetrics?.strideLengthM ?? null;
-    const importedAt = readMeta(session, "importedAt");
-    const lastSyncedAt = readMeta(session, "lastSyncedAt");
-    const externalId = readMeta(session, "externalId");
+function addDayNotes(
+    layout: PdfLayout,
+    day: WorkoutReportDay,
+): void {
+    if (!day.notes && day.tags.length === 0 && day.dayNotes.length === 0) return;
 
-    layout.addText(`${index + 1}. ${session.type}`, { font: "bold", size: 11, indent: 8, gapAfter: 2 });
-    layout.addText(`Inicio: ${session.startAt ?? "-"} | Fin: ${session.endAt ?? "-"} | Duración: ${formatDuration(session.durationSeconds)}`, { indent: 16 });
-    layout.addText(`Kcal activas: ${formatNumber(session.activeKcal, "", 1)} | Total: ${formatNumber(session.totalKcal, "", 1)} | FC prom/máx: ${formatNumber(session.avgHr, "", 0)}/${formatNumber(session.maxHr, "", 0)} bpm`, { indent: 16 });
+    const rows: string[][] = [];
+    if (day.notes) rows.push(["General", "Notas", day.notes, "-"]);
+    if (day.tags.length > 0) rows.push(["General", "Tags", day.tags.join(", "), "-"]);
+    day.dayNotes.forEach((note) => {
+        rows.push([
+            note.type,
+            note.title,
+            note.description ?? "-",
+            formatReportDateTime(note.updatedAt),
+        ]);
+    });
 
-    if (distance !== null || steps !== null || elevation !== null || pace !== null || cadence !== null) {
-        layout.addText(`Distancia: ${formatNumber(distance, " km", 2)} | Pasos: ${formatNumber(steps, "", 0)} | Elevación: ${formatNumber(elevation, " m", 1)}`, { indent: 16 });
-        layout.addText(`Ritmo: ${formatNumber(pace, " s/km", 0)} | Cadencia: ${formatNumber(cadence, " rpm", 0)} | RPE: ${formatNumber(session.effortRpe, "", 1)}`, { indent: 16 });
-
-        if (avgSpeed !== null || maxSpeed !== null || strideLength !== null) {
-            layout.addText(`Velocidad prom/máx: ${formatNumber(avgSpeed, " km/h", 2)}/${formatNumber(maxSpeed, " km/h", 2)} | Zancada: ${formatNumber(strideLength, " m", 2)}`, { indent: 16 });
-        }
-    }
-
-    if (source || device || kind) {
-        layout.addText(`Source: ${source ?? "N/D"} | Device: ${device ?? "N/D"} | Kind: ${kind ?? "N/D"}`, { indent: 16 });
-    }
-
-    if (importedAt || lastSyncedAt || externalId) {
-        layout.addText(`Importado: ${importedAt ?? "N/D"} | Última sync: ${lastSyncedAt ?? "N/D"} | External ID: ${externalId ?? "N/D"}`, { indent: 16 });
-    }
-
-    if (session.notes) layout.addText(`Notas: ${session.notes}`, { indent: 16 });
-
-    if (session.hasRoute || session.routeSummary || session.routePoints.length > 0) {
-        const points = session.routePoints.length || session.routeSummary?.pointCount || 0;
-        layout.addText(`Ruta GPS: ${points} puntos. Inicio (${formatNumber(session.routeSummary?.startLatitude ?? session.routePoints[0]?.latitude ?? null, "", 5)}, ${formatNumber(session.routeSummary?.startLongitude ?? session.routePoints[0]?.longitude ?? null, "", 5)}).`, { indent: 16 });
-    }
-
-    for (const exercise of session.exercises) {
-        layout.addText(`- ${exercise.name}${exercise.sets.length ? ` (${quantityLabel(exercise.sets.length, "set", "sets")})` : ""}`, { font: "bold", size: 10, indent: 22, gapAfter: 1 });
-        if (exercise.notes) layout.addText(`Notas: ${exercise.notes}`, { indent: 30, size: 9 });
-
-        for (const set of exercise.sets) {
-            const flags = [set.isWarmup ? "warmup" : null, set.isDropSet ? "drop" : null]
-                .filter((flag): flag is string => flag !== null)
-                .join(", ");
-            layout.addText(`Set ${set.setIndex}: ${set.reps ?? "-"} reps | ${set.weight ?? "-"} ${set.unit} | RPE ${set.rpe ?? "-"}${flags ? ` | ${flags}` : ""}`, { indent: 30, size: 9, gapAfter: 1 });
-        }
-    }
-
-    if (session.media.length > 0) {
-        layout.addText(`Media: ${quantityLabel(session.media.length, "archivo", "archivos")}`, { indent: 16 });
-        if (document.options.includeMediaLinks) {
-            for (const media of session.media) {
-                layout.addText(`${media.resourceType}/${media.format ?? "-"}: ${media.url}`, { indent: 24, size: 8, maxChars: 100 });
-            }
-        }
-    }
-
-    if (document.options.includeTechnicalMetadata && session.meta) {
-        layout.addText(`Metadata: ${safeJsonStringify(session.meta)}`, { indent: 16, size: 8, maxChars: 105 });
-    }
-
-    layout.addSpacer(4);
+    layout.addTable({
+        title: `Notas - ${formatReportDateLong(day.date)}`,
+        headers: ["Tipo", "Título", "Descripción", "Actualizada"],
+        rows,
+        widths: [14, 22, 48, 16],
+        fontSize: 7,
+        maxLinesPerCell: 5,
+    });
 }
 
-function addDay(layout: PdfLayout, day: WorkoutReportDay, document: WorkoutReportDocument): void {
-    layout.addHeading(day.date, 15);
+function addPlannedRoutine(
+    layout: PdfLayout,
+    day: WorkoutReportDay,
+): void {
+    const routine = day.plannedRoutine;
+    if (!routine) return;
 
-    if (day.isEmpty) {
-        layout.addText("Sin datos registrados para este día.", { size: 10, gapAfter: 8 });
-        return;
-    }
+    layout.addTable({
+        title: `Plan del día - ${formatReportDateLong(day.date)}`,
+        headers: ["Orden", "Ejercicio", "Movimiento", "Sets", "Reps", "Carga", "RPE", "Notas"],
+        rows: routine.exercises.map((exercise, index) => [
+            String(index + 1),
+            exercise.name,
+            exercise.movementName ?? "-",
+            exercise.sets === null ? "-" : String(exercise.sets),
+            exercise.reps ?? "-",
+            exercise.load ?? "-",
+            exercise.rpe === null ? "-" : String(exercise.rpe),
+            exercise.notes ?? "-",
+        ]),
+        widths: [7, 22, 18, 7, 9, 10, 7, 20],
+        fontSize: 6.8,
+        emptyMessage: `Plan sin ejercicios. Tipo: ${routine.sessionType ?? "-"}; Focus: ${routine.focus ?? "-"}.`,
+        maxLinesPerCell: 3,
+    });
 
-    if (day.tags.length > 0) layout.addText(`Tags: ${day.tags.join(", ")}`);
-    if (day.notes) layout.addText(`Notas generales: ${day.notes}`);
-
-    if (day.dayNotes.length > 0) {
-        layout.addText("Notas del día", { font: "bold", size: 12, gapAfter: 2 });
-        day.dayNotes.forEach((note) => {
-            layout.addText(`- [${note.type}] ${note.title}${note.description ? `: ${note.description}` : ""}`, { indent: 8 });
+    if (routine.notes) {
+        layout.addParagraph(`Notas del plan: ${routine.notes}`, {
+            size: 7.5,
+            color: COLOR_MUTED,
         });
     }
+}
 
-    addSleep(layout, day);
+function addTechnicalMetadata(
+    layout: PdfLayout,
+    day: WorkoutReportDay,
+): void {
+    const rows: string[][] = [];
+    if (day.meta) rows.push(["Día", safeJsonStringify(day.meta)]);
+    if (day.sleep?.raw) rows.push(["Sueño raw", safeJsonStringify(day.sleep.raw)]);
+    if (day.training?.raw) rows.push(["Training raw", safeJsonStringify(day.training.raw)]);
 
-    const sessions = day.training?.sessions ?? [];
-    if (sessions.length > 0) {
-        layout.addText(`Sesiones (${sessions.length})`, { font: "bold", size: 12, gapAfter: 3 });
-        sessions.forEach((session, index) => addSession(layout, session, index, document));
+    for (const session of day.training?.sessions ?? []) {
+        if (session.meta) {
+            rows.push([`Sesión ${session.type}`, safeJsonStringify(session.meta)]);
+        }
     }
 
-    if (day.plannedRoutine) {
-        layout.reserveSpace(72);
-        layout.addText("Plan del día", { font: "bold", size: 12, gapAfter: 3 });
-        layout.addText(`Tipo: ${day.plannedRoutine.sessionType ?? "-"} | Focus: ${day.plannedRoutine.focus ?? "-"}`, { indent: 8 });
-        day.plannedRoutine.exercises.forEach((exercise, index) => {
-            layout.addText(`${index + 1}. ${exercise.name} | ${exercise.sets ?? "-"} sets | ${exercise.reps ?? "-"} reps | ${exercise.load ?? "-"} | RPE ${exercise.rpe ?? "-"}`, { indent: 12 });
-            if (exercise.notes) layout.addText(`Notas: ${exercise.notes}`, { indent: 20, size: 9 });
-        });
-        if (day.plannedRoutine.notes) layout.addText(`Notas del plan: ${day.plannedRoutine.notes}`, { indent: 8 });
-    }
+    if (rows.length === 0) return;
 
-    if (document.options.includeTechnicalMetadata) {
-        if (day.sleep?.raw) layout.addText(`Sleep raw: ${safeJsonStringify(day.sleep.raw)}`, { size: 8, maxChars: 105 });
-        if (day.training?.raw) layout.addText(`Training raw: ${safeJsonStringify(day.training.raw)}`, { size: 8, maxChars: 105 });
-        if (day.meta) layout.addText(`Day metadata: ${safeJsonStringify(day.meta)}`, { size: 8, maxChars: 105 });
-    }
-
-    layout.addSpacer(8);
+    layout.addTable({
+        title: `Metadata técnica - ${day.date}`,
+        headers: ["Scope", "Valor JSON"],
+        rows,
+        widths: [20, 80],
+        fontSize: 6.2,
+        maxLinesPerCell: 8,
+    });
 }
 
 /**
- * Renders a complete, human-readable workout report as a PDF Buffer.
+ * Renders a complete, styled workout report as a landscape A4 PDF Buffer.
  */
-export function renderWorkoutReportPdf(document: WorkoutReportDocument): Buffer {
+export function renderWorkoutReportPdf(
+    document: WorkoutReportDocument,
+): Buffer {
     const layout = new PdfLayout();
-
+    addReportHeader(layout, document);
     addSummary(layout, document);
 
-    document.days.forEach((day, index) => {
-        if (index > 0) layout.forcePageBreak();
-        addDay(layout, day, document);
+    document.days.forEach((day) => {
+        const sessions = day.training?.sessions ?? [];
+
+        if (sessions.length > 0) {
+            layout.addSectionTitle(`Sesiones - ${formatReportDateLong(day.date)}`);
+            sessions.forEach((session, index) => {
+                layout.addSessionCard(day.date, session, index, document);
+            });
+        }
+
+        addDayNotes(layout, day);
+        addPlannedRoutine(layout, day);
+
+        if (document.options.includeTechnicalMetadata) {
+            addTechnicalMetadata(layout, day);
+        }
     });
 
     return layout.render();
