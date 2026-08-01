@@ -55,12 +55,22 @@ type SpreadsheetTableSheet = {
     rows: SpreadsheetRow[];
 };
 
+type SpreadsheetImage = {
+    name: string;
+    image: Buffer;
+    fromColumn: number;
+    fromRow: number;
+    toColumn: number;
+    toRow: number;
+};
+
 type SpreadsheetVisualSheet = {
     kind: "visual";
     name: string;
     columnWidths: number[];
     rows: SpreadsheetVisualRow[];
     merges: string[];
+    images: SpreadsheetImage[];
     freezeRows?: number;
 };
 
@@ -69,6 +79,17 @@ type SpreadsheetSheet = SpreadsheetTableSheet | SpreadsheetVisualSheet;
 type ZipEntry = {
     name: string;
     data: Buffer;
+};
+
+type SpreadsheetDrawingImage = SpreadsheetImage & {
+    mediaIndex: number;
+    relationshipId: string;
+};
+
+type SpreadsheetDrawingPlan = {
+    sheetIndex: number;
+    drawingIndex: number;
+    images: SpreadsheetDrawingImage[];
 };
 
 const XLSX_MAX_DATA_ROWS_PER_SHEET = 1_048_575;
@@ -324,15 +345,22 @@ function renderVisualWorksheet(sheet: SpreadsheetVisualSheet): string {
     const paneXml = freezeRows > 0
         ? `<pane ySplit="${freezeRows}" topLeftCell="A${freezeRows + 1}" activePane="bottomLeft" state="frozen"/>`
         : "";
+    const relationshipsNamespace = sheet.images.length > 0
+        ? ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+        : "";
+    const drawingXml = sheet.images.length > 0
+        ? '<drawing r:id="rId1"/>'
+        : "";
 
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"${relationshipsNamespace}>
   <dimension ref="${dimensions}"/>
   <sheetViews><sheetView workbookViewId="0" showGridLines="0">${paneXml}</sheetView></sheetViews>
   <sheetFormatPr defaultRowHeight="18"/>
   <cols>${columnsXml}</cols>
   <sheetData>${rowsXml}</sheetData>
   ${mergesXml}
+  ${drawingXml}
   <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
   <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>
 </worksheet>`;
@@ -461,6 +489,7 @@ function buildVisualReportSheet(
     const maxColumns = 24;
     const rows: SpreadsheetVisualRow[] = [];
     const merges: string[] = [];
+    const images: SpreadsheetImage[] = [];
     const { days, generatedAt, options, range, user } = document;
 
     function addRow(
@@ -845,6 +874,62 @@ function buildVisualReportSheet(
         "No hay rutas registradas para este periodo.",
     );
 
+    const sessionsWithMaps = reportSessions.filter(
+        ({ session }) => session.routeMap !== null,
+    );
+
+    if (sessionsWithMaps.length > 0) {
+        addSpacer();
+        addSection("Mapas de rutas");
+
+        sessionsWithMaps.forEach(({ day, session }, mapIndex) => {
+            const routeMap = session.routeMap;
+            if (!routeMap) return;
+
+            addMergedRow(
+                `${mapIndex + 1}. ${day.date} | ${session.type} | ${session.activityType ?? "Sesión"}`,
+                12,
+                24,
+            );
+
+            const imageStartRow = rows.length;
+            const detailLines = [
+                `Fecha: ${day.date}`,
+                `Sesión: ${session.type}`,
+                `Actividad: ${session.activityType ?? "-"}`,
+                `Duración: ${formatReportDuration(session.durationSeconds)}`,
+                `Distancia: ${formatReportNumber(getSessionDistanceKm(session), 2, " km")}`,
+                `Puntos de ruta: ${getSessionRoutePointCount(session)}`,
+                `Inicio: ${formatReportTime(session.startAt)}`,
+                `Fin: ${formatReportTime(session.endAt)}`,
+                "Mapa generado con Google Maps Static API.",
+            ];
+            const reservedRows = 12;
+
+            for (let rowIndex = 0; rowIndex < reservedRows; rowIndex += 1) {
+                const detail = detailLines[rowIndex] ?? "";
+                addMergedRow(
+                    detail,
+                    detail ? 9 : 4,
+                    24,
+                    12,
+                    maxColumns - 1,
+                );
+            }
+
+            images.push({
+                name: `Mapa ${mapIndex + 1} - ${session.type}`,
+                image: routeMap.image,
+                fromColumn: 0,
+                fromRow: imageStartRow,
+                toColumn: 12,
+                toRow: imageStartRow + reservedRows,
+            });
+
+            addSpacer(8);
+        });
+    }
+
     const planRows = days.flatMap((day) => {
         const routine = day.plannedRoutine;
         if (!routine) return [];
@@ -902,6 +987,7 @@ function buildVisualReportSheet(
         ],
         rows,
         merges,
+        images,
         freezeRows: 2,
     };
 }
@@ -1539,6 +1625,91 @@ function buildSheets(document: WorkoutReportDocument): SpreadsheetSheet[] {
     return sheets;
 }
 
+function buildDrawingPlans(
+    sheets: readonly SpreadsheetSheet[],
+): SpreadsheetDrawingPlan[] {
+    const plans: SpreadsheetDrawingPlan[] = [];
+    let mediaIndex = 0;
+
+    sheets.forEach((sheet, sheetIndex) => {
+        if (sheet.kind !== "visual" || sheet.images.length === 0) return;
+
+        const drawingIndex = plans.length + 1;
+        const images = sheet.images.map((image, imageIndex) => {
+            mediaIndex += 1;
+            return {
+                ...image,
+                mediaIndex,
+                relationshipId: `rId${imageIndex + 1}`,
+            };
+        });
+
+        plans.push({
+            sheetIndex,
+            drawingIndex,
+            images,
+        });
+    });
+
+    return plans;
+}
+
+function renderWorksheetDrawingRelationship(
+    plan: SpreadsheetDrawingPlan,
+): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${plan.drawingIndex}.xml"/>
+</Relationships>`;
+}
+
+function renderDrawingRelationships(plan: SpreadsheetDrawingPlan): string {
+    const relationships = plan.images
+        .map(
+            (image) =>
+                `<Relationship Id="${image.relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${image.mediaIndex}.jpg"/>`,
+        )
+        .join("");
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`;
+}
+
+function renderDrawing(plan: SpreadsheetDrawingPlan): string {
+    const anchors = plan.images
+        .map((image, index) => `
+  <xdr:twoCellAnchor editAs="oneCell">
+    <xdr:from>
+      <xdr:col>${image.fromColumn}</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>${image.fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:from>
+    <xdr:to>
+      <xdr:col>${image.toColumn}</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>${image.toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:to>
+    <xdr:pic>
+      <xdr:nvPicPr>
+        <xdr:cNvPr id="${index + 1}" name="${escapeXml(image.name)}"/>
+        <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
+      </xdr:nvPicPr>
+      <xdr:blipFill>
+        <a:blip r:embed="${image.relationshipId}"/>
+        <a:stretch><a:fillRect/></a:stretch>
+      </xdr:blipFill>
+      <xdr:spPr>
+        <a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+      </xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>`)
+        .join("");
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${anchors}
+</xdr:wsDr>`;
+}
+
 /**
  * Renders a complete workout report as an XLSX Buffer without third-party dependencies.
  */
@@ -1547,6 +1718,7 @@ export function renderWorkoutReportXlsx(document: WorkoutReportDocument): Buffer
         ...sheet,
         name: sanitizeSheetName(sheet.name),
     }));
+    const drawingPlans = buildDrawingPlans(sheets);
 
     const workbookSheets = sheets
         .map(
@@ -1569,6 +1741,15 @@ export function renderWorkoutReportXlsx(document: WorkoutReportDocument): Buffer
                 `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
         )
         .join("");
+    const drawingOverrides = drawingPlans
+        .map(
+            (plan) =>
+                `<Override PartName="/xl/drawings/drawing${plan.drawingIndex}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`,
+        )
+        .join("");
+    const imageContentType = drawingPlans.length > 0
+        ? '<Default Extension="jpg" ContentType="image/jpeg"/>'
+        : "";
 
     const entries: ZipEntry[] = [
         {
@@ -1577,11 +1758,13 @@ export function renderWorkoutReportXlsx(document: WorkoutReportDocument): Buffer
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  ${imageContentType}
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
   ${contentOverrides}
+  ${drawingOverrides}
 </Types>`, "utf8"),
         },
         {
@@ -1639,6 +1822,27 @@ export function renderWorkoutReportXlsx(document: WorkoutReportDocument): Buffer
             name: `xl/worksheets/sheet${index + 1}.xml`,
             data: Buffer.from(renderWorksheet(sheet), "utf8"),
         })),
+        ...drawingPlans.map((plan): ZipEntry => ({
+            name: `xl/worksheets/_rels/sheet${plan.sheetIndex + 1}.xml.rels`,
+            data: Buffer.from(
+                renderWorksheetDrawingRelationship(plan),
+                "utf8",
+            ),
+        })),
+        ...drawingPlans.map((plan): ZipEntry => ({
+            name: `xl/drawings/drawing${plan.drawingIndex}.xml`,
+            data: Buffer.from(renderDrawing(plan), "utf8"),
+        })),
+        ...drawingPlans.map((plan): ZipEntry => ({
+            name: `xl/drawings/_rels/drawing${plan.drawingIndex}.xml.rels`,
+            data: Buffer.from(renderDrawingRelationships(plan), "utf8"),
+        })),
+        ...drawingPlans.flatMap((plan) =>
+            plan.images.map((image): ZipEntry => ({
+                name: `xl/media/image${image.mediaIndex}.jpg`,
+                data: image.image,
+            })),
+        ),
     ];
 
     return createZip(entries);

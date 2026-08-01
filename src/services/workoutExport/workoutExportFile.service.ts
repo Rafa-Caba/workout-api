@@ -14,6 +14,7 @@ import { countInclusiveDays, normalizeFilePart } from "./workoutExport.utils";
 import { renderWorkoutReportPdf } from "./workoutExportPdf.renderer";
 import { resolveWorkoutReportRange } from "./workoutExportRange";
 import { buildWorkoutReportSummary } from "./workoutExportSummary.builder";
+import { attachWorkoutReportStaticMaps } from "./workoutExportStaticMap.service";
 import { renderWorkoutReportXlsx } from "./workoutExportXlsx.renderer";
 
 function buildFilename(document: WorkoutReportDocument): string {
@@ -58,12 +59,13 @@ export async function createWorkoutReportFile(
         days,
     };
 
+    const documentWithStaticMaps = await attachWorkoutReportStaticMaps(document);
     const buffer = normalizedRequest.format === "xlsx"
-        ? renderWorkoutReportXlsx(document)
-        : renderWorkoutReportPdf(document);
+        ? renderWorkoutReportXlsx(documentWithStaticMaps)
+        : renderWorkoutReportPdf(documentWithStaticMaps);
 
     return {
-        filename: buildFilename(document),
+        filename: buildFilename(documentWithStaticMaps),
         contentType:
             normalizedRequest.format === "xlsx"
                 ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

@@ -160,6 +160,14 @@ export type WorkoutReportRouteSummary = {
     maxLongitude: number | null;
 };
 
+export type WorkoutReportRouteMap = {
+    provider: "google-static-maps";
+    contentType: "image/jpeg";
+    width: number;
+    height: number;
+    image: Buffer;
+};
+
 export type WorkoutReportRoutePoint = {
     latitude: number;
     longitude: number;
@@ -191,6 +199,7 @@ export type WorkoutReportSession = {
     cardioMetrics: WorkoutReportCardioMetrics | null;
     routeSummary: WorkoutReportRouteSummary | null;
     routePoints: WorkoutReportRoutePoint[];
+    routeMap: WorkoutReportRouteMap | null;
     effortRpe: number | null;
     notes: string | null;
     media: WorkoutReportMedia[];

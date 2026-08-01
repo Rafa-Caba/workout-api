@@ -31,6 +31,14 @@ import { safeJsonStringify } from "./workoutExport.utils";
 type PdfFont = "regular" | "bold";
 type PdfColor = readonly [number, number, number];
 
+type PdfImageResource = {
+    name: string;
+    image: Buffer;
+    width: number;
+    height: number;
+    pageIndex: number;
+};
+
 type PdfTextOptions = {
     font?: PdfFont;
     size?: number;
@@ -169,6 +177,7 @@ function sessionMetricRows(
 
 class PdfLayout {
     private pages: string[][] = [[]];
+    private images: PdfImageResource[] = [];
     private currentY = TOP_Y;
 
     private get currentPage(): string[] {
@@ -257,6 +266,28 @@ class PdfLayout {
     ): void {
         this.currentPage.push(
             `q ${colorCommand(color, true)} ${lineWidth} w ${x1} ${y1} m ${x2} ${y2} l S Q`,
+        );
+    }
+
+    drawJpegAt(
+        image: Buffer,
+        imageWidth: number,
+        imageHeight: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+    ): void {
+        const name = `Im${this.images.length + 1}`;
+        this.images.push({
+            name,
+            image,
+            width: imageWidth,
+            height: imageHeight,
+            pageIndex: this.pages.length - 1,
+        });
+        this.currentPage.push(
+            `q ${width} 0 0 ${height} ${x} ${y} cm /${name} Do Q`,
         );
     }
 
@@ -481,11 +512,37 @@ class PdfLayout {
             color: COLOR_DARK,
         });
         this.drawTextAt(
-            `${getSessionRoutePointCount(session)} puntos (sin mapa base)`,
+            session.routeMap
+                ? `${getSessionRoutePointCount(session)} puntos | Google Maps`
+                : `${getSessionRoutePointCount(session)} puntos (sin mapa base)`,
             x + 8,
             y + height - 27,
             { size: 6.8, color: COLOR_MUTED },
         );
+
+        if (session.routeMap) {
+            const availableWidth = width - 16;
+            const availableHeight = height - 42;
+            const scale = Math.min(
+                availableWidth / session.routeMap.width,
+                availableHeight / session.routeMap.height,
+            );
+            const renderedWidth = session.routeMap.width * scale;
+            const renderedHeight = session.routeMap.height * scale;
+            const imageX = x + (width - renderedWidth) / 2;
+            const imageY = y + 7 + (availableHeight - renderedHeight) / 2;
+
+            this.drawJpegAt(
+                session.routeMap.image,
+                session.routeMap.width,
+                session.routeMap.height,
+                imageX,
+                imageY,
+                renderedWidth,
+                renderedHeight,
+            );
+            return;
+        }
 
         const routePoints = points.length >= 2
             ? points
@@ -726,11 +783,14 @@ class PdfLayout {
     }
 
     render(): Buffer {
-        return buildPdf(this.pages);
+        return buildPdf(this.pages, this.images);
     }
 }
 
-function buildPdf(pageStreams: readonly string[][]): Buffer {
+function buildPdf(
+    pageStreams: readonly string[][],
+    images: readonly PdfImageResource[],
+): Buffer {
     const pageCount = pageStreams.length;
     const pageObjectNumbers = pageStreams.map((_page, index) => 5 + index * 2);
     const contentObjectNumbers = pageStreams.map((_page, index) => 6 + index * 2);
@@ -770,10 +830,21 @@ function buildPdf(pageStreams: readonly string[][]): Buffer {
         const pageObject = pageObjectNumbers[index];
         const contentObject = contentObjectNumbers[index];
 
+        const pageImages = images.filter((image) => image.pageIndex === index);
+        const imageResources = pageImages.length > 0
+            ? `/XObject << ${pageImages
+                .map((image) => {
+                    const imageIndex = images.findIndex((candidate) => candidate.name === image.name);
+                    const imageObject = 5 + pageCount * 2 + imageIndex;
+                    return `/${image.name} ${imageObject} 0 R`;
+                })
+                .join(" ")} >>`
+            : "";
+
         objects.set(
             pageObject,
             Buffer.from(
-                `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObject} 0 R >>`,
+                `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> ${imageResources} >> /Contents ${contentObject} 0 R >>`,
                 "latin1",
             ),
         );
@@ -787,7 +858,22 @@ function buildPdf(pageStreams: readonly string[][]): Buffer {
         );
     });
 
-    const maxObject = 4 + pageCount * 2;
+    images.forEach((image, index) => {
+        const imageObject = 5 + pageCount * 2 + index;
+        objects.set(
+            imageObject,
+            Buffer.concat([
+                Buffer.from(
+                    `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.image.length} >>\nstream\n`,
+                    "latin1",
+                ),
+                image.image,
+                Buffer.from("\nendstream", "latin1"),
+            ]),
+        );
+    });
+
+    const maxObject = 4 + pageCount * 2 + images.length;
     const parts: Buffer[] = [Buffer.from("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", "latin1")];
     const offsets: number[] = [0];
     let currentOffset = parts[0].length;

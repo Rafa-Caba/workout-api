@@ -183,6 +183,7 @@ function normalizeSession(value: unknown): WorkoutReportSession | null {
         cardioMetrics: normalizeCardioMetrics(value.cardioMetrics),
         routeSummary: normalizeRouteSummary(value.routeSummary),
         routePoints,
+        routeMap: null,
         effortRpe: readNumberFrom(value, "effortRpe"),
         notes: readStringFrom(value, "notes"),
         media: normalizeMedia(value.media),
